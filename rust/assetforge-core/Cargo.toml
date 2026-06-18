@@ -1,0 +1,21 @@
+[package]
+name = "assetforge-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core Rust library for AssetForge: image processing, vectorization, mesh ops, splat compression"
+
+[dependencies]
+image = "0.25"
+lyon = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+cfg-if = "1"
+zstd = "0.13"
+snap = "1"
+log = "0.4"
+
+[lib]
+name = "assetforge_core"
+path = "src/lib.rs"

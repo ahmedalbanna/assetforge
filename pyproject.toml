@@ -1,0 +1,90 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0", "setuptools>=68.0"]
+build-backend = "maturin"
+
+[project]
+name = "assetforge"
+version = "0.1.0"
+description = "Convert real-world images into game-ready digital assets (2D sprites, 3D meshes, Gaussian splats)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "AssetForge Contributors" },
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Game Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Rust",
+    "Topic :: Games/Entertainment",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "typer>=0.12.0",
+    "click>=8.0",
+    "opencv-python>=4.8.0",
+    "pillow>=10.0.0",
+    "numpy>=1.24.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+# ML backends
+sam2 = ["torch>=2.0.0", "torchvision>=0.15.0", "sam2"]
+rembg = ["rembg>=0.7.0"]
+all-ml = ["assetforge[sam2,rembg]"]
+
+# 3D generation backends
+triposr = ["omegaconf>=2.3", "einops>=0.7", "trimesh>=4.0", "imageio"]
+hunyuan3d = ["hy3dgen"]
+trellis = ["trellis2"]
+all-3dgen = ["assetforge[triposr,hunyuan3d,trellis]"]
+
+# Complete install
+all = [
+    "assetforge[sam2,rembg,triposr,hunyuan3d,trellis]",
+    "huggingface_hub>=0.20",
+    "scipy>=1.10",
+    "trimesh>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/assetforge/assetforge"
+Repository = "https://github.com/assetforge/assetforge"
+Documentation = "https://assetforge.readthedocs.io"
+
+[project.scripts]
+assetforge = "assetforge.cli:main"
+
+[tool.maturin]
+# PyO3 native module configuration
+features = ["pyo3/extension-module"]
+module-name = "assetforge_pyo3"
+manifest-path = "rust/assetforge-pyo3/Cargo.toml"
+bindings = "pyo3"
+
+[tool.maturin.sdist-include]
+paths = ["rust/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["assetforge"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise ImportError",
+    "except ImportError",
+]

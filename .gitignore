@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+*.pyc
+
+# Rust
+rust/target/
+target/wheels/
+
+# Models
+models/
+!scripts/download_models.sh
+
+# Output / Results
+output/
+demo_output/
+benchmark_results/
+
+# Temp / Cache
+.cache/
+*.tmp
+/tmp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.local
+
+# Coverage
+htmlcov/
+.coverage
+coverage.xml
+
+# TripoSR cloned repo (auto-downloaded)
+triposr_repo/
+.hf_cache/
