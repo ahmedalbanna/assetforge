@@ -557,7 +557,7 @@ def main():
     parser.add_argument(
         "--share", action="store_true", help="Create a public Gradio share link"
     )
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host address")
     args = parser.parse_args()
 
     print(f"\n  🎮 AssetForge Web UI")

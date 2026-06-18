@@ -110,6 +110,7 @@ class Pipeline3DGS(BasePipeline):
 
     def _train_splats(self) -> list[Path]:
         """Train 3D Gaussian representation from posed images."""
+        self.require_attr("_poses_dir", "camera_poses")
         from assetforge.backends.gaussian_splat import train_splats
 
         output_path = self.stages_dir / "splat.ply"
@@ -124,6 +125,7 @@ class Pipeline3DGS(BasePipeline):
 
     def _extract_mesh(self) -> list[Path]:
         """Extract surface mesh from trained Gaussians using SuGaR or MILo."""
+        self.require_attr("_splat_path", "train_splats")
         if self.mesh_method == "milo":
             from assetforge.backends.gaussian_splat import extract_mesh_milo
 
@@ -142,10 +144,8 @@ class Pipeline3DGS(BasePipeline):
 
     def _compress_splats(self) -> list[Path]:
         """Compress Gaussian splats to SPZ format using Rust backend."""
-        import struct
-        import numpy as np
+        self.require_attr("_splat_path", "train_splats")
 
-        # Read PLY file and compress
         try:
             from assetforge_pyo3 import compress_splats
         except ImportError:
@@ -174,6 +174,15 @@ class Pipeline3DGS(BasePipeline):
 
     def _export_gltf(self) -> list[Path]:
         """Export Gaussian splats as GLTF with KHR_gaussian_splatting extension."""
+        splat_path = getattr(self, "_spz_path", None) or getattr(
+            self, "_splat_path", None
+        )
+        if splat_path is None:
+            raise RuntimeError(
+                "No splat data to export — training stage likely failed. "
+                "Check 'train_splats' stage for details."
+            )
+
         try:
             from assetforge_pyo3 import export_splat_gltf
         except ImportError:
@@ -181,11 +190,9 @@ class Pipeline3DGS(BasePipeline):
             import shutil
 
             output_path = self.output_dir / "splat.ply"
-            shutil.copy2(self._splat_path, output_path)
+            shutil.copy2(str(splat_path), str(output_path))
             return [output_path]
 
-        splat_path = getattr(self, "_spz_path", self._splat_path)
         output_path = self.output_dir / "splat.glb"
-
         export_splat_gltf(str(splat_path), str(output_path))
         return [output_path]

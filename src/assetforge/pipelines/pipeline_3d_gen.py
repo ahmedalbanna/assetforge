@@ -112,6 +112,7 @@ class Pipeline3DGen(BasePipeline):
 
     def _cleanup_mesh(self) -> list[Path]:
         """Remove floaters, close holes, smooth the raw mesh."""
+        self.require_attr("_raw_mesh_path", "ai_generation")
         from assetforge.backends.blender import BlenderBackend
 
         blender = BlenderBackend()
@@ -122,6 +123,7 @@ class Pipeline3DGen(BasePipeline):
 
     def _apply_retopology(self) -> list[Path]:
         """Decimate and remesh for game-optimized topology."""
+        self.require_attr("_cleaned_mesh_path", "mesh_cleanup")
         from assetforge.backends.blender import BlenderBackend
 
         blender = BlenderBackend()
@@ -139,10 +141,13 @@ class Pipeline3DGen(BasePipeline):
 
     def _bake_textures(self) -> list[Path]:
         """Bake PBR texture maps from the generated mesh."""
+        self.require_attr("_raw_mesh_path", "ai_generation")
         from assetforge.backends.blender import BlenderBackend
 
         blender = BlenderBackend()
-        mesh = getattr(self, "_final_mesh_path", self._cleaned_mesh_path)
+        mesh = getattr(self, "_final_mesh_path", None) or getattr(
+            self, "_cleaned_mesh_path", self._raw_mesh_path
+        )
         tex_dir = self.stages_dir / "textures"
 
         blender.bake_textures(
@@ -155,7 +160,18 @@ class Pipeline3DGen(BasePipeline):
 
     def _export_model(self) -> list[Path]:
         """Export the final model in game-ready format."""
-        mesh = getattr(self, "_final_mesh_path", self._cleaned_mesh_path)
+        # Fall back through mesh chain: final > cleaned > raw
+        mesh = (
+            getattr(self, "_final_mesh_path", None)
+            or getattr(self, "_cleaned_mesh_path", None)
+            or getattr(self, "_raw_mesh_path", None)
+        )
+        if mesh is None:
+            raise RuntimeError(
+                "No mesh to export — all generation stages failed. "
+                "Check ai_generation stage for details."
+            )
+
         output_ext = f".{self.output_format}"
         output_path = self.output_dir / f"model{output_ext}"
 

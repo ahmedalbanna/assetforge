@@ -128,21 +128,26 @@ class Pipeline3DPhoto(BasePipeline):
         mvs_dir = self.stages_dir / "mvs"
         output_path = self.stages_dir / "mesh_raw.obj"
         reconstruct_mesh(str(mvs_dir), str(output_path))
+        self._reconstructed_mesh_path = Path(output_path)
         return [output_path]
 
     def _map_textures(self) -> list[Path]:
         """Project photo textures onto the reconstructed mesh."""
+        self.require_attr("_reconstructed_mesh_path", "mesh_reconstruction")
         from assetforge.backends.openmvs import map_textures
 
-        mesh_path = self.stages_dir / "mesh_raw.obj"
-        mvs_dir = self.stages_dir / "mvs"
         output_path = self.stages_dir / "mesh_textured.obj"
-        map_textures(str(mesh_path), str(mvs_dir), str(output_path))
+        map_textures(
+            str(self._reconstructed_mesh_path),
+            str(self.stages_dir / "mvs"),
+            str(output_path),
+        )
         self._textured_mesh_path = Path(output_path)
         return [output_path]
 
     def _apply_retopology(self) -> list[Path]:
         """Apply quad remeshing via Blender headless for game-ready topology."""
+        self.require_attr("_textured_mesh_path", "texture_mapping")
         from assetforge.backends.blender import BlenderBackend
 
         blender = BlenderBackend()
@@ -168,9 +173,16 @@ class Pipeline3DPhoto(BasePipeline):
 
     def _export_model(self) -> list[Path]:
         """Export the final model in the requested game format."""
-        mesh_path = getattr(self, "_final_mesh_path", None) or getattr(
-            self, "_textured_mesh_path", self.stages_dir / "mesh_textured.obj"
+        mesh_path = (
+            getattr(self, "_final_mesh_path", None)
+            or getattr(self, "_textured_mesh_path", None)
+            or getattr(self, "_reconstructed_mesh_path", None)
         )
+        if mesh_path is None:
+            raise RuntimeError(
+                "No mesh to export — all reconstruction stages failed. "
+                "Check previous stages for details."
+            )
 
         output_ext = f".{self.output_format}"
         output_path = self.output_dir / f"model{output_ext}"

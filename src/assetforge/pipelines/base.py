@@ -44,6 +44,24 @@ class BasePipeline(ABC):
         """Execute all stages of the pipeline."""
         ...
 
+    def require_attr(self, attr_name: str, stage_name: str = "") -> None:
+        """Check that a required attribute exists (set by a previous stage).
+
+        Raises a clear error if the attribute is missing, which indicates
+        the previous stage failed and this stage should be skipped.
+
+        Args:
+            attr_name: Name of the attribute to check
+            stage_name: Human-readable name of the stage that should have set it
+        """
+        if not hasattr(self, attr_name):
+            prev = stage_name or attr_name.strip("_").replace("_", " ")
+            raise RuntimeError(
+                f"Required attribute '{attr_name}' not found. "
+                f"Previous stage '{prev}' likely failed. "
+                f"This stage is being skipped."
+            )
+
     def run_stage(self, name: str, fn, *args, **kwargs) -> StageResult:
         """Run a single pipeline stage with timing and error handling."""
         logger.info(f"[{self.name}] Stage: {name}...")
