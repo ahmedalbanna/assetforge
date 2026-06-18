@@ -84,31 +84,82 @@ class Pipeline3DGen(BasePipeline):
         return self.stages
 
     def _generate_3d(self) -> list[Path]:
-        """Run the selected AI model to generate 3D mesh from image."""
-        if self.model_name == "triposr":
-            from assetforge.backends.triposr import TripoSRBackend
+        """Run the selected AI model to generate 3D mesh from image.
 
-            backend = TripoSRBackend()
-        elif self.model_name == "hunyuan3d-2":
-            from assetforge.backends.hunyuan3d import Hunyuan3DBackend
+        Falls back to lighter models if the primary model is unavailable.
+        Fallback chain: trellis → hunyuan3d-2 → triposr
+        """
+        models_to_try = self._resolve_model_chain()
 
-            backend = Hunyuan3DBackend()
-        elif self.model_name == "trellis":
-            from assetforge.backends.trellis import TRELLISBackend
+        last_error = None
+        for model_name, backend_class_path in models_to_try:
+            try:
+                logger.info(f"Attempting model: {model_name}...")
+                module_path, class_name = backend_class_path
+                import importlib
 
-            backend = TRELLISBackend()
+                module = importlib.import_module(module_path)
+                backend_cls = getattr(module, class_name)
+                backend = backend_cls()
+
+                output_path = self.stages_dir / f"raw_{model_name}.glb"
+                backend.generate(
+                    str(self.input_path),
+                    str(output_path),
+                    pbr=self.generate_pbr,
+                    tex_resolution=self.texture_resolution,
+                )
+                self._raw_mesh_path = Path(output_path)
+                self.model_name = model_name
+                logger.info(f"✓ Model '{model_name}' succeeded")
+                return [output_path]
+
+            except ImportError as e:
+                logger.warning(f"Model '{model_name}' not available: {e}")
+                last_error = e
+                continue
+            except Exception as e:
+                logger.warning(f"Model '{model_name}' failed: {e}")
+                last_error = e
+                continue
+
+        # All models failed
+        raise RuntimeError(
+            f"All AI models failed to generate a 3D mesh.\n"
+            f"  Requested model: {self.model_name}\n"
+            f"  Last error: {last_error}\n\n"
+            f"Try installing one of the required packages:\n"
+            f"  - TripoSR:   (auto-setup by backend)\n"
+            f"  - Hunyuan3D: pip install hy3dgen\n"
+            f"  - TRELLIS:   pip install trellis2"
+        )
+
+    def _resolve_model_chain(self) -> list[tuple[str, tuple[str, str]]]:
+        """Resolve the ordered list of models to attempt.
+
+        Returns list of (model_name, (module_path, class_name)) tuples.
+        """
+        # Model registry: (model_name, (module, class))
+        all_models = {
+            "trellis": ("assetforge.backends.trellis", "TRELLISBackend"),
+            "hunyuan3d-2": ("assetforge.backends.hunyuan3d", "Hunyuan3DBackend"),
+            "triposr": ("assetforge.backends.triposr", "TripoSRBackend"),
+        }
+
+        if self.model_name == "auto":
+            # Try in order of quality (best first, fall back to lighter)
+            return [
+                ("trellis", all_models["trellis"]),
+                ("hunyuan3d-2", all_models["hunyuan3d-2"]),
+                ("triposr", all_models["triposr"]),
+            ]
+        elif self.model_name in all_models:
+            # Try only the specified model, then fall back to lighter ones
+            ordered_keys = ["trellis", "hunyuan3d-2", "triposr"]
+            start_idx = ordered_keys.index(self.model_name)
+            return [(k, all_models[k]) for k in ordered_keys[start_idx:]]
         else:
             raise ValueError(f"Unknown model: {self.model_name}")
-
-        output_path = self.stages_dir / f"raw_{self.model_name}.glb"
-        backend.generate(
-            str(self.input_path),
-            str(output_path),
-            pbr=self.generate_pbr,
-            tex_resolution=self.texture_resolution,
-        )
-        self._raw_mesh_path = Path(output_path)
-        return [output_path]
 
     def _cleanup_mesh(self) -> list[Path]:
         """Remove floaters, close holes, smooth the raw mesh."""
