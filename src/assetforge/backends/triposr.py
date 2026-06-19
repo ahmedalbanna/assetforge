@@ -48,6 +48,7 @@ class TripoSRBackend:
         "omegaconf>=2.3",
         "einops>=0.7",
         "trimesh>=4.0",
+        "scikit-image",
         "imageio",
         "imageio-ffmpeg",
         "rembg",
@@ -134,22 +135,74 @@ class TripoSRBackend:
         except subprocess.TimeoutExpired:
             logger.warning("Dependency install timed out. Try manually.")
 
+    @staticmethod
+    def _remap_vit_state_dict(state_dict: dict) -> dict:
+        """Remap ViT state dict keys from transformers v4 naming to v5 naming.
+
+        Transformers v5 renamed ViTModel's internal modules:
+          v4: encoder.layer.{N}.attention.attention.{proj}.weight
+          v5: layers.{N}.attention.{proj}.weight
+        """
+        import re
+
+        remapped = {}
+        for key, value in state_dict.items():
+            # Match v4 ViT encoder patterns
+            new_key = re.sub(
+                r"\.encoder\.layer\.(\d+)\.attention\.attention\.",
+                r".layers.\1.attention.",
+                key,
+            )
+            new_key = re.sub(
+                r"\.encoder\.layer\.(\d+)\.attention\.output\.",
+                r".layers.\1.attention.output.",
+                new_key,
+            )
+            new_key = re.sub(
+                r"\.encoder\.layer\.(\d+)\.intermediate\.",
+                r".layers.\1.intermediate.",
+                new_key,
+            )
+            new_key = re.sub(
+                r"\.encoder\.layer\.(\d+)\.output\.",
+                r".layers.\1.output.",
+                new_key,
+            )
+            new_key = re.sub(
+                r"\.encoder\.layer\.(\d+)\.layernorm_before\.",
+                r".layers.\1.layernorm_before.",
+                new_key,
+            )
+            new_key = re.sub(
+                r"\.encoder\.layer\.(\d+)\.layernorm_after\.",
+                r".layers.\1.layernorm_after.",
+                new_key,
+            )
+            new_key = re.sub(
+                r"\.encoder\.layernorm\.",
+                r".layernorm.",
+                new_key,
+            )
+            remapped[new_key] = value
+        return remapped
+
     def _install_mcubes_fallback(self):
-        """Create a torchmcubes compatibility module using trimesh marching cubes."""
+        """Create a torchmcubes compatibility module using skimage marching cubes."""
         mcubes_code = """
 import torch
 import numpy as np
-import trimesh
+from skimage.measure import marching_cubes as sk_marching_cubes
 
 def marching_cubes(sdf_tensor, isovalue=0.0):
-    \"\"\"Marching cubes using trimesh as fallback.\"\"\"
+    \"\"\"Marching cubes using skimage as fallback for torchmcubes.\"\"\"
     sdf = sdf_tensor.detach().cpu().numpy() if sdf_tensor.requires_grad else sdf_tensor.cpu().numpy()
+    sdf = sdf.squeeze()
     
-    # trimesh marching cubes
-    vertices, faces, _, _ = trimesh.voxel.marching_cubes(
-        sdf.squeeze(), 
-        pitch=1.0,
-    )
+    # skimage marching cubes
+    try:
+        vertices, faces, _, _ = sk_marching_cubes(sdf, level=isovalue)
+    except Exception:
+        return torch.zeros((0, 3)), torch.zeros((0, 3), dtype=torch.long)
     
     if len(vertices) == 0 or len(faces) == 0:
         return torch.zeros((0, 3)), torch.zeros((0, 3), dtype=torch.long)
@@ -200,6 +253,10 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             from tsr.system import TSR
             from tsr.utils import remove_background, resize_foreground
             from huggingface_hub import hf_hub_download
+            from transformers import __version__ as transformers_version
+
+            major = int(transformers_version.split(".")[0])
+            using_transformers_v5 = major >= 5
 
             # Download model weights
             ckpt_path = hf_hub_download(
@@ -212,11 +269,27 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             )
 
             logger.info("Loading TripoSR model...")
-            model = TSR.from_pretrained(
-                self.MODEL_REPO,
-                config_name="config.yaml",
-                weight_name="model.ckpt",
-            )
+            if using_transformers_v5:
+                # Build model manually so we can remap v4→v5 state dict keys
+                from omegaconf import OmegaConf
+
+                cfg = OmegaConf.load(config_path)
+                OmegaConf.resolve(cfg)
+                model = TSR(cfg)
+                ckpt = torch.load(ckpt_path, map_location="cpu")
+                ckpt = self._remap_vit_state_dict(ckpt)
+                missing, unexpected = model.load_state_dict(ckpt, strict=False)
+                if missing:
+                    logger.warning(
+                        f"Missing keys in TripoSR checkpoint (may affect quality): "
+                        f"{[k for k in missing if 'image_tokenizer' not in k][:5]}"
+                    )
+            else:
+                model = TSR.from_pretrained(
+                    self.MODEL_REPO,
+                    config_name="config.yaml",
+                    weight_name="model.ckpt",
+                )
             model.renderer.set_chunk_size(131072)
             model.to(self.device)
             model.eval()
@@ -229,6 +302,12 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             try:
                 image = remove_background(image)
                 image = resize_foreground(image, 0.8)
+                # Convert RGBA back to RGB for ViT compatibility
+                if image.mode == "RGBA":
+                    # Composite onto white background
+                    background = Image.new("RGB", image.size, (255, 255, 255))
+                    background.paste(image, mask=image.split()[3])
+                    image = background
             except Exception:
                 import numpy as np
 
@@ -251,7 +330,9 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
                 scene_codes = model([image], device=self.device)
 
             logger.info("Extracting mesh...")
-            meshes = model.extract_mesh(scene_codes, resolution=256)
+            meshes = model.extract_mesh(
+                scene_codes, has_vertex_color=False, resolution=256
+            )
 
             # Export mesh
             output = Path(output_path)
