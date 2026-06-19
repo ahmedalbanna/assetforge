@@ -44,8 +44,20 @@ class TripoSRBackend:
             except ImportError:
                 self.device = "cpu"
 
+    TRIPOSR_DEPS = [
+        "omegaconf>=2.3",
+        "einops>=0.7",
+        "trimesh>=4.0",
+        "imageio",
+        "imageio-ffmpeg",
+        "rembg",
+        "huggingface_hub",
+        "transformers",
+        "xatlas",
+    ]
+
     def _ensure_repo(self):
-        """Clone TripoSR repo if not already available."""
+        """Clone TripoSR repo and install dependencies if needed."""
         if self._repo_ready:
             return True
 
@@ -73,6 +85,9 @@ class TripoSRBackend:
         if str(TRIPOSR_DIR) not in sys.path:
             sys.path.insert(0, str(TRIPOSR_DIR))
 
+        # Install Python dependencies automatically
+        self._install_deps()
+
         # Create torchmcubes compatibility layer if needed
         try:
             import torchmcubes  # noqa
@@ -84,9 +99,40 @@ class TripoSRBackend:
 
             self._repo_ready = True
             return True
-        except ImportError:
-            logger.error("Failed to import tsr module")
+        except ImportError as e:
+            logger.error(f"Failed to import tsr module: {e}")
             return False
+
+    def _install_deps(self):
+        """Install required Python packages via pip."""
+        missing = []
+        for dep in self.TRIPOSR_DEPS:
+            pkg_name = dep.split(">=")[0].split("==")[0].strip()
+            try:
+                __import__(pkg_name.replace("-", "_"))
+            except ImportError:
+                missing.append(dep)
+
+        if not missing:
+            return
+
+        logger.info(f"Installing TripoSR dependencies: {', '.join(missing)}...")
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q"] + missing,
+                check=True,
+                capture_output=True,
+                timeout=120,
+            )
+            logger.info("Dependencies installed successfully")
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.decode() if e.stderr else ""
+            logger.warning(
+                f"Some dependencies failed to install:\n{stderr}\n"
+                f"Try manually: pip install {' '.join(missing)}"
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("Dependency install timed out. Try manually.")
 
     def _install_mcubes_fallback(self):
         """Create a torchmcubes compatibility module using trimesh marching cubes."""
@@ -113,18 +159,12 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
     
     return vertices_tensor, faces_tensor
 """
-        # Install the fallback module
-        import importlib.util
+        import types
 
-        spec = importlib.util.spec_from_loader("torchmcubes", loader=None)
-        if spec is None:
-            # Create a simple module file
-            import types
-
-            mod = types.ModuleType("torchmcubes")
-            exec(mcubes_code, mod.__dict__)
-            sys.modules["torchmcubes"] = mod
-            logger.info("Installed torchmcubes fallback (trimesh-based marching cubes)")
+        mod = types.ModuleType("torchmcubes")
+        exec(mcubes_code, mod.__dict__)
+        sys.modules["torchmcubes"] = mod
+        logger.info("Installed torchmcubes fallback (trimesh-based marching cubes)")
 
     def generate(
         self,
