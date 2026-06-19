@@ -131,34 +131,113 @@ def cmd_3d_gen(
         ..., help="Single input image (concept art, reference)"
     ),
     output: str = typer.Option("./output", "-o", "--output", help="Output directory"),
-    model: str = typer.Option(
-        "auto", "--model", help="AI model: 'auto', 'triposr', 'hunyuan3d-2', 'trellis'"
+    # Quality preset (overrides individual settings)
+    quality: str = typer.Option(
+        "",
+        "--quality",
+        "-q",
+        help="Quality preset: 'fast', 'balanced', 'high', 'ultra'. "
+        "Overrides per-parameter flags. If empty, uses per-param defaults.",
     ),
+    # Model selection
+    model: str = typer.Option(
+        "auto",
+        "--model",
+        "-m",
+        help="AI model: 'auto', 'triposr', 'hunyuan3d-2', 'trellis'",
+    ),
+    # Geometric fidelity
+    mesh_resolution: int = typer.Option(
+        256,
+        "--mesh-res",
+        "-mr",
+        help="Marching cubes resolution (128/256/512). Higher = more detail but slower.",
+    ),
+    foreground_ratio: float = typer.Option(
+        0.85,
+        "--foreground-ratio",
+        "-fg",
+        help="Object fill ratio (0.5-1.0). Higher = more pixels on object.",
+    ),
+    chunk_size: int = typer.Option(
+        131072,
+        "--chunk-size",
+        "-cs",
+        help="Renderer chunk size. Lower = less VRAM, higher = faster.",
+    ),
+    # Sampling quality
+    steps: int = typer.Option(
+        50,
+        "--steps",
+        "-s",
+        help="Denoising steps (10-100). Higher = better quality but slower.",
+    ),
+    guidance: float = typer.Option(
+        5.0,
+        "--guidance",
+        "-g",
+        help="CFG scale (3.0-15.0). Higher = more faithful to input.",
+    ),
+    # Texture quality
+    tex_resolution: int = typer.Option(
+        2048,
+        "--tex-resolution",
+        "-tr",
+        help="Texture resolution (1024/2048/4096/8192)",
+    ),
+    pbr: bool = typer.Option(
+        False,
+        "--pbr",
+        help="Generate full PBR material maps (albedo, normal, roughness)",
+    ),
+    bake_original: bool = typer.Option(
+        True,
+        "--bake-original/--no-bake-original",
+        help="Project original input image onto mesh as texture",
+    ),
+    # Retopology
     retopology: bool = typer.Option(
-        False, "--retopology", help="Optimize mesh for game use"
+        False, "--retopology", "-r", help="Optimize mesh topology for game engines"
     ),
     target_faces: int = typer.Option(
-        20000, "--target-faces", help="Target triangle count"
+        20000,
+        "--target-faces",
+        "-tf",
+        help="Target triangle/quad count after retopology",
     ),
-    pbr: bool = typer.Option(False, "--pbr", help="Generate PBR material maps"),
-    tex_resolution: int = typer.Option(
-        2048, "--tex-resolution", help="Texture resolution"
-    ),
+    # Output format
     format: str = typer.Option(
-        "glb", "--format", help="Output format: 'glb', 'obj', 'fbx'"
+        "glb", "--format", "-f", help="Output format: 'glb', 'obj', 'fbx'"
     ),
 ):
-    """Generate a 3D model from a single image using AI."""
+    """Generate a 3D model from a single image using AI.
+
+    Quality presets (--quality):
+    \b
+      fast      \tTripoSR, low res, no PBR (fastest)
+      balanced  \tAuto model, medium res, PBR (default)
+      high      \tHunyuan3D-2, high res, PBR + retopology
+      ultra     \tTRELLIS, max res, PBR + retopology
+
+    For fine control, use individual flags instead of --quality.
+    """
     from assetforge.pipelines.pipeline_3d_gen import Pipeline3DGen
 
     pipeline = Pipeline3DGen(
         input_path=input,
         output_dir=output,
+        quality=quality,
         model_name=model,
+        mesh_resolution=mesh_resolution,
+        foreground_ratio=foreground_ratio,
+        chunk_size=chunk_size,
+        inference_steps=steps,
+        guidance_scale=guidance,
+        texture_resolution=tex_resolution,
+        generate_pbr=pbr,
+        bake_from_original=bake_original,
         retopology=retopology,
         target_faces=target_faces,
-        generate_pbr=pbr,
-        texture_resolution=tex_resolution,
         output_format=format,
     )
     pipeline.run()

@@ -2,6 +2,7 @@
 3D Generative AI Pipeline — Generates 3D models from a single image using AI.
 
 Stages:
+0. Input preprocessing (smart crop, background removal options)
 1. AI 3D generation (TripoSR / Hunyuan3D-2 / TRELLIS)
 2. Mesh cleanup (Blender headless)
 3. Retopology (Blender headless) [optional]
@@ -17,6 +18,65 @@ from assetforge.utils.gpu import detect_gpu, select_3d_model
 
 logger = logging.getLogger("assetforge")
 
+# Quality presets: presets determine model + defaults for all quality knobs
+QUALITY_PRESETS = {
+    "fast": {
+        "model": "triposr",
+        "mesh_resolution": 128,
+        "inference_steps": 25,
+        "guidance_scale": 3.0,
+        "foreground_ratio": 0.9,
+        "chunk_size": 65536,
+        "texture_resolution": 1024,
+        "retopology": False,
+        "generate_pbr": False,
+        "target_faces": 10000,
+        "bake_from_original": False,
+    },
+    "balanced": {
+        "model": "auto",  # picks best available (auto GPU-based)
+        "mesh_resolution": 256,
+        "inference_steps": 50,
+        "guidance_scale": 5.0,
+        "foreground_ratio": 0.85,
+        "chunk_size": 131072,
+        "texture_resolution": 2048,
+        "retopology": True,
+        "generate_pbr": True,
+        "target_faces": 15000,
+        "bake_from_original": True,
+    },
+    "high": {
+        "model": "hunyuan3d-2",
+        "mesh_resolution": 512,
+        "inference_steps": 50,
+        "guidance_scale": 7.5,
+        "foreground_ratio": 0.82,
+        "chunk_size": 262144,
+        "texture_resolution": 4096,
+        "retopology": True,
+        "generate_pbr": True,
+        "target_faces": 30000,
+        "bake_from_original": True,
+    },
+    "ultra": {
+        "model": "trellis",
+        "mesh_resolution": 512,
+        "inference_steps": 75,
+        "guidance_scale": 10.0,
+        "foreground_ratio": 0.8,
+        "chunk_size": 524288,
+        "texture_resolution": 8192,
+        "retopology": True,
+        "generate_pbr": True,
+        "target_faces": 50000,
+        "bake_from_original": True,
+    },
+}
+
+# Default preset used when no preset specified
+DEFAULT_PRESET = "balanced"
+
 
 class Pipeline3DGen(BasePipeline):
     """Generate a 3D model from a single image using generative AI."""
@@ -25,20 +85,64 @@ class Pipeline3DGen(BasePipeline):
         self,
         input_path: str,
         output_dir: str = "./output",
+        # Quality preset (overrides individual params)
+        quality: str = "",
+        # Model selection
         model_name: str = "auto",
+        # Geometric fidelity
+        mesh_resolution: int = 256,
+        foreground_ratio: float = 0.85,
+        chunk_size: int = 131072,
+        # Sampling quality (TRELLIS/Hunyuan)
+        inference_steps: int = 50,
+        guidance_scale: float = 5.0,
+        # Texture quality
+        texture_resolution: int = 2048,
+        generate_pbr: bool = False,
+        bake_from_original: bool = True,
+        # Retopology
         retopology: bool = False,
         target_faces: int = 20000,
-        generate_pbr: bool = False,
-        texture_resolution: int = 2048,
+        # Output format
         output_format: str = "glb",
     ):
         super().__init__(output_dir, name="3d-generative")
         self.input_path = Path(input_path).resolve()
-        self.model_name = model_name
-        self.retopology = retopology
-        self.target_faces = target_faces
-        self.generate_pbr = generate_pbr
-        self.texture_resolution = texture_resolution
+
+        # Resolve quality preset if specified
+        if quality and quality in QUALITY_PRESETS:
+            preset = QUALITY_PRESETS[quality]
+            self.model_name = preset.get("model", model_name)
+            self.mesh_resolution = preset.get("mesh_resolution", mesh_resolution)
+            self.inference_steps = preset.get("inference_steps", inference_steps)
+            self.guidance_scale = preset.get("guidance_scale", guidance_scale)
+            self.foreground_ratio = preset.get("foreground_ratio", foreground_ratio)
+            self.chunk_size = preset.get("chunk_size", chunk_size)
+            self.texture_resolution = preset.get(
+                "texture_resolution", texture_resolution
+            )
+            self.generate_pbr = preset.get("generate_pbr", generate_pbr)
+            self.bake_from_original = preset.get(
+                "bake_from_original", bake_from_original
+            )
+            self.retopology = preset.get("retopology", retopology)
+            self.target_faces = preset.get("target_faces", target_faces)
+            self.quality_preset = quality
+            logger.info(f"Using quality preset: '{quality}' (model: {self.model_name})")
+        else:
+            self.model_name = model_name
+            self.mesh_resolution = mesh_resolution
+            self.inference_steps = inference_steps
+            self.guidance_scale = guidance_scale
+            self.foreground_ratio = foreground_ratio
+            self.chunk_size = chunk_size
+            self.texture_resolution = texture_resolution
+            self.generate_pbr = generate_pbr
+            self.bake_from_original = bake_from_original
+            self.retopology = retopology
+            self.target_faces = target_faces
+            self.quality_preset = quality
+
         self.output_format = output_format
 
         self.stages_dir = self.output_dir / "stages"
@@ -63,6 +167,9 @@ class Pipeline3DGen(BasePipeline):
                 self.model_name = "triposr"  # Lightest model
             logger.info(f"Auto-selected model: {self.model_name}")
 
+        # Stage 0: Input preprocessing (optional)
+        self.run_stage("preprocess", self._preprocess_input)
+
         # Stage 1: AI 3D generation
         self.run_stage("ai_generation", self._generate_3d)
 
@@ -74,7 +181,7 @@ class Pipeline3DGen(BasePipeline):
             self.run_stage("retopology", self._apply_retopology)
 
         # Stage 4: Texture baking (optional)
-        if self.generate_pbr:
+        if self.generate_pbr or self.bake_from_original:
             self.run_stage("texture_baking", self._bake_textures)
 
         # Stage 5: Export
@@ -83,12 +190,62 @@ class Pipeline3DGen(BasePipeline):
         self.summary()
         return self.stages
 
+    def _preprocess_input(self) -> list[Path]:
+        """Preprocess the input image for better 3D generation results."""
+        import numpy as np
+        from PIL import Image, ImageOps
+
+        image = Image.open(self.input_path).convert("RGB")
+        w, h = image.size
+
+        # Smart crop: detect rough object bounds and center-crop
+        try:
+            from rembg import remove
+
+            # Quick background removal to find object bounds
+            rgba = remove(image)
+            alpha = np.array(rgba.split()[3])
+            rows = np.any(alpha > 10, axis=1)
+            cols = np.any(alpha > 10, axis=0)
+            if rows.any() and cols.any():
+                y_min, y_max = np.where(rows)[0][[0, -1]]
+                x_min, x_max = np.where(cols)[0][[0, -1]]
+                # Add 10% padding
+                pad_y = int((y_max - y_min) * 0.1)
+                pad_x = int((x_max - x_min) * 0.1)
+                y_min = max(0, y_min - pad_y)
+                y_max = min(h, y_max + pad_y)
+                x_min = max(0, x_min - pad_x)
+                x_max = min(w, x_max + pad_x)
+                image = image.crop((x_min, y_min, x_max, y_max))
+                logger.info(f"Cropped image to object bounds: {image.size}")
+        except Exception:
+            logger.debug("Smart crop skipped (rembg not available)")
+
+        # Pad to square (improves TripoSR/TRELLIS results)
+        size = max(image.size)
+        padded = ImageOps.pad(
+            image, (size, size), color=(255, 255, 255), centering=(0.5, 0.5)
+        )
+
+        output_path = self.stages_dir / "input_preprocessed.png"
+        padded.save(output_path)
+        logger.info(f"Preprocessed input saved to: {output_path}")
+
+        # Store preprocessed path for later stages
+        self._preprocessed_input = output_path
+
+        return [output_path]
+
     def _generate_3d(self) -> list[Path]:
         """Run the selected AI model to generate 3D mesh from image.
 
         Falls back to lighter models if the primary model is unavailable.
         Fallback chain: trellis → hunyuan3d-2 → triposr
         """
+        # Use preprocessed input if available
+        input_path = str(getattr(self, "_preprocessed_input", None) or self.input_path)
+
         models_to_try = self._resolve_model_chain()
 
         last_error = None
@@ -104,10 +261,14 @@ class Pipeline3DGen(BasePipeline):
 
                 output_path = self.stages_dir / f"raw_{model_name}.glb"
                 backend.generate(
-                    str(self.input_path),
+                    input_path,
                     str(output_path),
                     pbr=self.generate_pbr,
                     tex_resolution=self.texture_resolution,
+                    mesh_resolution=self.mesh_resolution,
+                    foreground_ratio=self.foreground_ratio,
+                    chunk_size=self.chunk_size,
+                    bake_from_original=self.bake_from_original,
                 )
                 self._raw_mesh_path = Path(output_path)
                 self.model_name = model_name
@@ -147,14 +308,12 @@ class Pipeline3DGen(BasePipeline):
         }
 
         if self.model_name == "auto":
-            # Try in order of quality (best first, fall back to lighter)
             return [
                 ("trellis", all_models["trellis"]),
                 ("hunyuan3d-2", all_models["hunyuan3d-2"]),
                 ("triposr", all_models["triposr"]),
             ]
         elif self.model_name in all_models:
-            # Try only the specified model, then fall back to lighter ones
             ordered_keys = ["trellis", "hunyuan3d-2", "triposr"]
             start_idx = ordered_keys.index(self.model_name)
             return [(k, all_models[k]) for k in ordered_keys[start_idx:]]
@@ -191,23 +350,89 @@ class Pipeline3DGen(BasePipeline):
         return [decimated, quads]
 
     def _bake_textures(self) -> list[Path]:
-        """Bake PBR texture maps from the generated mesh."""
+        """Bake PBR or original-image texture maps onto the mesh."""
         self.require_attr("_raw_mesh_path", "ai_generation")
         from assetforge.backends.blender import BlenderBackend
+        import numpy as np
+        from PIL import Image
 
-        blender = BlenderBackend()
         mesh = getattr(self, "_final_mesh_path", None) or getattr(
             self, "_cleaned_mesh_path", self._raw_mesh_path
         )
         tex_dir = self.stages_dir / "textures"
+        tex_dir.mkdir(parents=True, exist_ok=True)
 
-        blender.bake_textures(
-            str(mesh),
-            str(self._raw_mesh_path),
-            str(tex_dir),
-            resolution=self.texture_resolution,
-        )
-        return list(tex_dir.glob("*"))
+        outputs = []
+
+        # Project original image texture
+        if self.bake_from_original:
+            try:
+                logger.info("Projecting original image onto mesh...")
+                input_img = str(
+                    getattr(self, "_preprocessed_input", None) or self.input_path
+                )
+                # Try Blender bake first, fall back to simple vertex color
+                try:
+                    blender = BlenderBackend()
+                    blender.bake_textures(
+                        str(mesh),
+                        input_img,
+                        str(tex_dir),
+                        resolution=self.texture_resolution,
+                    )
+                    outputs.extend(list(tex_dir.glob("*")))
+                except Exception:
+                    logger.warning(
+                        "Blender texture bake unavailable, using vertex colors"
+                    )
+                    # Fallback: vertex color projection
+                    import trimesh
+
+                    m = trimesh.load(str(mesh))
+                    img = np.array(
+                        Image.open(input_img).resize(
+                            (self.texture_resolution, self.texture_resolution)
+                        )
+                    )
+                    verts = m.vertices
+                    vmin = verts.min(axis=0)
+                    vmax = verts.max(axis=0)
+                    vrange = np.maximum(vmax - vmin, 1e-8)
+                    norm = (verts - vmin) / vrange
+                    uvs = np.stack([norm[:, 0], 1.0 - norm[:, 1]], axis=1)
+                    h, w = img.shape[:2]
+                    uv_pixels = np.clip(uvs * [w, h], 0, [w - 1, h - 1]).astype(
+                        np.int32
+                    )
+                    vertex_colors = img[uv_pixels[:, 1], uv_pixels[:, 0]] / 255.0
+                    colored = trimesh.Trimesh(
+                        vertices=m.vertices,
+                        faces=m.faces,
+                        vertex_colors=vertex_colors,
+                    )
+                    colored_path = tex_dir.parent / "mesh_textured.obj"
+                    colored.export(str(colored_path))
+                    outputs.append(colored_path)
+                    logger.info(f"Vertex-colored mesh saved to: {colored_path}")
+            except Exception as e:
+                logger.warning(f"Original-image texture projection failed: {e}")
+
+        # PBR baking via Blender (if requested)
+        if self.generate_pbr:
+            try:
+                logger.info("Baking PBR textures via Blender...")
+                blender = BlenderBackend()
+                blender.bake_textures(
+                    str(mesh),
+                    str(getattr(self, "_preprocessed_input", None) or self.input_path),
+                    str(tex_dir),
+                    resolution=self.texture_resolution,
+                )
+                outputs.extend(list(tex_dir.glob("*")))
+            except Exception as e:
+                logger.warning(f"PBR baking failed: {e}")
+
+        return outputs
 
     def _export_model(self) -> list[Path]:
         """Export the final model in game-ready format."""

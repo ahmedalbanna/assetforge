@@ -225,6 +225,10 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
         output_path: str,
         pbr: bool = False,
         tex_resolution: int = 2048,
+        mesh_resolution: int = 256,
+        foreground_ratio: float = 0.85,
+        chunk_size: int = 131072,
+        bake_from_original: bool = True,
     ) -> Path:
         """Generate a 3D mesh from a single image using TripoSR.
 
@@ -232,7 +236,13 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             input_path: Path to input image
             output_path: Path to save output mesh
             pbr: Whether to generate PBR materials (TripoSR basic support)
-            tex_resolution: Texture resolution
+            tex_resolution: Texture resolution (1024/2048/4096)
+            mesh_resolution: Marching cubes mesh resolution (128/256/512).
+                Higher = more geometric detail but slower and more VRAM.
+            foreground_ratio: How much of the square canvas the object fills
+                (0.5-1.0). Higher = more pixels on the object.
+            chunk_size: Renderer chunk size for TripoSR. Lower = less VRAM.
+            bake_from_original: Project original image onto mesh as texture.
 
         Returns:
             Path to the output mesh
@@ -270,7 +280,6 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
 
             logger.info("Loading TripoSR model...")
             if using_transformers_v5:
-                # Build model manually so we can remap v4→v5 state dict keys
                 from omegaconf import OmegaConf
 
                 cfg = OmegaConf.load(config_path)
@@ -290,7 +299,7 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
                     config_name="config.yaml",
                     weight_name="model.ckpt",
                 )
-            model.renderer.set_chunk_size(131072)
+            model.renderer.set_chunk_size(chunk_size)
             model.to(self.device)
             model.eval()
 
@@ -299,9 +308,10 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             image = Image.open(input_path).convert("RGB")
 
             # Remove background
+            original_image = image.copy()
             try:
                 image = remove_background(image)
-                image = resize_foreground(image, 0.8)
+                image = resize_foreground(image, foreground_ratio)
                 # Convert RGBA back to RGB for ViT compatibility
                 if image.mode == "RGBA":
                     # Composite onto white background
@@ -312,9 +322,7 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
                 import numpy as np
 
                 logger.warning("Background removal failed, using raw image")
-                # Convert to expected input format
                 arr = np.array(image).astype(np.float32) / 255.0
-                # Pad to square with white background
                 size = max(arr.shape[0], arr.shape[1])
                 square = np.ones((size, size, 3), dtype=np.float32)
                 y_off = (size - arr.shape[0]) // 2
@@ -329,9 +337,9 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             with torch.no_grad():
                 scene_codes = model([image], device=self.device)
 
-            logger.info("Extracting mesh...")
+            logger.info("Extracting mesh (resolution=%d)...", mesh_resolution)
             meshes = model.extract_mesh(
-                scene_codes, has_vertex_color=False, resolution=256
+                scene_codes, has_vertex_color=False, resolution=mesh_resolution
             )
 
             # Export mesh
@@ -344,10 +352,25 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             meshes[0].export(str(output))
             logger.info(f"TripoSR mesh saved to: {output}")
 
-            # Optional texture baking
+            # Optional: project original image onto mesh as texture
+            if bake_from_original and not pbr:
+                try:
+                    logger.info("Projecting original image onto mesh...")
+                    tex_dir = output.parent / "textures"
+                    tex_dir.mkdir(exist_ok=True)
+                    self._project_texture(
+                        mesh=meshes[0],
+                        original_image=original_image,
+                        tex_dir=tex_dir,
+                        resolution=tex_resolution,
+                    )
+                except Exception as e:
+                    logger.warning(f"Texture projection failed: {e}")
+
+            # Optional TripoSR native texture baking
             if pbr:
                 try:
-                    logger.info("Baking texture...")
+                    logger.info("Baking PBR texture...")
                     from tsr.bake_texture import bake_texture
                     import xatlas
                     import numpy as np
@@ -358,7 +381,6 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
                     tex_dir = output.parent / "textures"
                     tex_dir.mkdir(exist_ok=True)
 
-                    # Export textured mesh
                     xatlas.export(
                         str(output),
                         meshes[0].vertices[bake_output["vmapping"]],
@@ -366,12 +388,11 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
                         bake_output["uvs"],
                         meshes[0].vertex_normals[bake_output["vmapping"]],
                     )
-                    # Save texture
                     texture = (bake_output["colors"] * 255.0).astype(np.uint8)
                     Image.fromarray(texture).transpose(Image.FLIP_TOP_BOTTOM).save(
                         str(tex_dir / "albedo.png")
                     )
-                    logger.info(f"Textured mesh saved to: {output}")
+                    logger.info(f"PBR textured mesh saved to: {output}")
                 except Exception as e:
                     logger.warning(f"Texture baking failed: {e}")
 
@@ -386,3 +407,48 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             raise RuntimeError(f"TripoSR inference failed: {e}")
 
         return Path(output_path)
+
+    @staticmethod
+    def _project_texture(mesh, original_image, tex_dir, resolution=2048):
+        """Project original image onto mesh via simple front-view UV mapping."""
+        import numpy as np
+        from PIL import Image
+
+        # Simple cylindrical-like projection from front view
+        verts = mesh.vertices
+        # Normalize vertices to [-1, 1] range
+        vmin = verts.min(axis=0)
+        vmax = verts.max(axis=0)
+        vrange = np.maximum(vmax - vmin, 1e-8)
+        norm = (verts - vmin) / vrange  # [0, 1]
+
+        # Project front view: use X (right) for U, Y (up) for V
+        # TripoSR coordinate system: Y-up, X-right, Z-forward (toward viewer)
+        uvs = np.stack([norm[:, 0], norm[:, 1]], axis=1)
+
+        # Flip V for image coordinates
+        uvs[:, 1] = 1.0 - uvs[:, 1]
+
+        # Sample image at UV locations
+        img = np.array(original_image.convert("RGB").resize((resolution, resolution)))
+        h, w = img.shape[:2]
+        uv_pixels = np.clip(uvs * [w, h], 0, [w - 1, h - 1]).astype(np.int32)
+
+        # Create texture atlas by interpolating vertex colors
+        # Simple approach: create a blank texture and flood-fill from UV map
+        # For a proper implementation, we'd use barycentric interpolation
+        # For now, create a simple vertex-color-based export
+        vertex_colors = img[uv_pixels[:, 1], uv_pixels[:, 0]] / 255.0
+
+        # Save vertex-colored mesh
+        import trimesh
+
+        colored_mesh = trimesh.Trimesh(
+            vertices=mesh.vertices,
+            faces=mesh.faces,
+            vertex_colors=vertex_colors,
+        )
+        colored_mesh.export(str(tex_dir.parent / "mesh_colored.obj"))
+        logger.info(
+            f"Vertex-colored mesh saved to: {tex_dir.parent / 'mesh_colored.obj'}"
+        )
