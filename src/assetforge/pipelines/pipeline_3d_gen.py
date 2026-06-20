@@ -13,7 +13,12 @@ Stages:
 import logging
 from pathlib import Path
 
-from assetforge.pipelines.base import BasePipeline
+from assetforge.pipelines.base import (
+    BasePipeline,
+    validate_input_image,
+    validate_output_dir,
+    clamp,
+)
 from assetforge.utils.gpu import detect_gpu, select_3d_model
 
 logger = logging.getLogger("assetforge")
@@ -107,7 +112,23 @@ class Pipeline3DGen(BasePipeline):
         output_format: str = "glb",
     ):
         super().__init__(output_dir, name="3d-generative")
-        self.input_path = Path(input_path).resolve()
+        # Validate inputs (extension check only, existence checked at runtime)
+        self.input_path = validate_input_image(input_path, check_exists=False)
+        self.output_dir = validate_output_dir(output_dir)
+
+        # Validate and clamp numeric parameters
+        self.mesh_resolution = int(clamp(mesh_resolution, 64, 1024, "mesh_resolution"))
+        self.foreground_ratio = clamp(foreground_ratio, 0.5, 1.0, "foreground_ratio")
+        self.chunk_size = int(clamp(chunk_size, 4096, 1_048_576, "chunk_size"))
+        self.inference_steps = int(clamp(inference_steps, 1, 200, "inference_steps"))
+        self.guidance_scale = clamp(guidance_scale, 1.0, 30.0, "guidance_scale")
+        self.texture_resolution = int(
+            clamp(texture_resolution, 256, 16384, "texture_resolution")
+        )
+        self.target_faces = int(clamp(target_faces, 100, 5_000_000, "target_faces"))
+
+        # Model name is validated at runtime in _resolve_model_chain()
+        # Output format is validated at runtime in the export stage
 
         # Resolve quality preset if specified
         if quality and quality in QUALITY_PRESETS:

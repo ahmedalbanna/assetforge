@@ -133,106 +133,131 @@ pub fn decompress_spz(data: &[u8]) -> CoreResult<GaussianSplats> {
 // ── Quantization helpers ──
 
 fn quantize_positions(positions: &[[f32; 3]]) -> Vec<u16> {
-    positions.iter().flat_map(|p| {
-        p.iter().map(|&v| {
-            // Normalize to [0, 65535] range (assumes positions in unit cube)
-            let clamped = v.clamp(-10.0, 10.0);
-            let normalized = (clamped + 10.0) / 20.0;
-            (normalized * 65535.0) as u16
+    positions
+        .iter()
+        .flat_map(|p| {
+            p.iter().map(|&v| {
+                // Normalize to [0, 65535] range (assumes positions in unit cube)
+                let clamped = v.clamp(-10.0, 10.0);
+                let normalized = (clamped + 10.0) / 20.0;
+                (normalized * 65535.0) as u16
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn dequantize_positions(data: &[u16], n: usize) -> Vec<[f32; 3]> {
-    data.chunks(3).take(n).map(|chunk| {
-        [
-            (chunk[0] as f32 / 65535.0) * 20.0 - 10.0,
-            (chunk[1] as f32 / 65535.0) * 20.0 - 10.0,
-            (chunk[2] as f32 / 65535.0) * 20.0 - 10.0,
-        ]
-    }).collect()
+    data.chunks(3)
+        .take(n)
+        .map(|chunk| {
+            [
+                (chunk[0] as f32 / 65535.0) * 20.0 - 10.0,
+                (chunk[1] as f32 / 65535.0) * 20.0 - 10.0,
+                (chunk[2] as f32 / 65535.0) * 20.0 - 10.0,
+            ]
+        })
+        .collect()
 }
 
 fn quantize_rotations(rotations: &[[f32; 4]]) -> Vec<u16> {
-    rotations.iter().flat_map(|q| {
-        q.iter().map(|&v| {
-            // Map from [-1, 1] to [0, 65535]
-            let clamped = v.clamp(-1.0, 1.0);
-            let normalized = (clamped + 1.0) / 2.0;
-            (normalized * 65535.0) as u16
+    rotations
+        .iter()
+        .flat_map(|q| {
+            q.iter().map(|&v| {
+                // Map from [-1, 1] to [0, 65535]
+                let clamped = v.clamp(-1.0, 1.0);
+                let normalized = (clamped + 1.0) / 2.0;
+                (normalized * 65535.0) as u16
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn dequantize_rotations(data: &[u16], n: usize) -> Vec<[f32; 4]> {
-    data.chunks(4).take(n).map(|chunk| {
-        let mut q = [
-            (chunk[0] as f32 / 65535.0) * 2.0 - 1.0,
-            (chunk[1] as f32 / 65535.0) * 2.0 - 1.0,
-            (chunk[2] as f32 / 65535.0) * 2.0 - 1.0,
-            (chunk[3] as f32 / 65535.0) * 2.0 - 1.0,
-        ];
-        // Normalize quaternion
-        let len = (q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]).sqrt();
-        if len > 0.0 {
-            for v in &mut q {
-                *v /= len;
+    data.chunks(4)
+        .take(n)
+        .map(|chunk| {
+            let mut q = [
+                (chunk[0] as f32 / 65535.0) * 2.0 - 1.0,
+                (chunk[1] as f32 / 65535.0) * 2.0 - 1.0,
+                (chunk[2] as f32 / 65535.0) * 2.0 - 1.0,
+                (chunk[3] as f32 / 65535.0) * 2.0 - 1.0,
+            ];
+            // Normalize quaternion
+            let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+            if len > 0.0 {
+                for v in &mut q {
+                    *v /= len;
+                }
             }
-        }
-        q
-    }).collect()
+            q
+        })
+        .collect()
 }
 
 fn quantize_scales(scales: &[[f32; 3]]) -> Vec<u16> {
-    scales.iter().flat_map(|s| {
-        s.iter().map(|&v| {
-            let clamped = v.clamp(0.0, 100.0);
-            let normalized = clamped / 100.0;
-            (normalized * 65535.0) as u16
+    scales
+        .iter()
+        .flat_map(|s| {
+            s.iter().map(|&v| {
+                let clamped = v.clamp(0.0, 100.0);
+                let normalized = clamped / 100.0;
+                (normalized * 65535.0) as u16
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn dequantize_scales(data: &[u16], n: usize) -> Vec<[f32; 3]> {
-    data.chunks(3).take(n).map(|chunk| {
-        [
-            chunk[0] as f32 / 65535.0 * 100.0,
-            chunk[1] as f32 / 65535.0 * 100.0,
-            chunk[2] as f32 / 65535.0 * 100.0,
-        ]
-    }).collect()
+    data.chunks(3)
+        .take(n)
+        .map(|chunk| {
+            [
+                chunk[0] as f32 / 65535.0 * 100.0,
+                chunk[1] as f32 / 65535.0 * 100.0,
+                chunk[2] as f32 / 65535.0 * 100.0,
+            ]
+        })
+        .collect()
 }
 
 fn quantize_opacities(opacities: &[f32]) -> Vec<u16> {
-    opacities.iter().map(|&v| {
-        let clamped = v.clamp(0.0, 1.0);
-        (clamped * 65535.0) as u16
-    }).collect()
-}
-
-fn dequantize_opacities(data: &[u16], n: usize) -> Vec<f32> {
-    data.iter().take(n).map(|&v| {
-        v as f32 / 65535.0
-    }).collect()
-}
-
-fn quantize_colors(colors: &[[f32; 3]]) -> Vec<u16> {
-    colors.iter().flat_map(|c| {
-        c.iter().map(|&v| {
+    opacities
+        .iter()
+        .map(|&v| {
             let clamped = v.clamp(0.0, 1.0);
             (clamped * 65535.0) as u16
         })
-    }).collect()
+        .collect()
+}
+
+fn dequantize_opacities(data: &[u16], n: usize) -> Vec<f32> {
+    data.iter().take(n).map(|&v| v as f32 / 65535.0).collect()
+}
+
+fn quantize_colors(colors: &[[f32; 3]]) -> Vec<u16> {
+    colors
+        .iter()
+        .flat_map(|c| {
+            c.iter().map(|&v| {
+                let clamped = v.clamp(0.0, 1.0);
+                (clamped * 65535.0) as u16
+            })
+        })
+        .collect()
 }
 
 fn dequantize_colors(data: &[u16], n: usize) -> Vec<[f32; 3]> {
-    data.chunks(3).take(n).map(|chunk| {
-        [
-            chunk[0] as f32 / 65535.0,
-            chunk[1] as f32 / 65535.0,
-            chunk[2] as f32 / 65535.0,
-        ]
-    }).collect()
+    data.chunks(3)
+        .take(n)
+        .map(|chunk| {
+            [
+                chunk[0] as f32 / 65535.0,
+                chunk[1] as f32 / 65535.0,
+                chunk[2] as f32 / 65535.0,
+            ]
+        })
+        .collect()
 }
 
 fn compress_channel(
@@ -240,9 +265,7 @@ fn compress_channel(
     data: &[u16],
     quality: CompressionQuality,
 ) -> CoreResult<()> {
-    let byte_data: Vec<u8> = data.iter()
-        .flat_map(|&v| v.to_le_bytes())
-        .collect();
+    let byte_data: Vec<u8> = data.iter().flat_map(|&v| v.to_le_bytes()).collect();
 
     let level = match quality {
         CompressionQuality::Low => 1,
@@ -267,20 +290,22 @@ fn decompress_channel(
         return Err(CoreError::InvalidInput("Unexpected end of SPZ data".into()));
     }
 
-    let compressed_len = u32::from_le_bytes(
-        data[*offset..*offset + 4].try_into().unwrap()
-    ) as usize;
+    let compressed_len =
+        u32::from_le_bytes(data[*offset..*offset + 4].try_into().unwrap()) as usize;
     *offset += 4;
 
     if *offset + compressed_len > data.len() {
-        return Err(CoreError::InvalidInput("Compressed chunk exceeds data length".into()));
+        return Err(CoreError::InvalidInput(
+            "Compressed chunk exceeds data length".into(),
+        ));
     }
 
     let decompressed = zstd::decode_all(&data[*offset..*offset + compressed_len])
         .map_err(|e| CoreError::Compression(format!("ZSTD decompression failed: {}", e)))?;
     *offset += compressed_len;
 
-    let result: Vec<u16> = decompressed.chunks_exact(2)
+    let result: Vec<u16> = decompressed
+        .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect();
 

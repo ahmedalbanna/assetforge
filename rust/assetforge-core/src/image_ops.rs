@@ -3,8 +3,8 @@
 //! Provides fast pixel-level operations for sprite processing,
 //! including resize, crop, normalize, and format conversion.
 
-use image::{DynamicImage, ImageBuffer, Rgba};
 use crate::error::{CoreError, CoreResult};
+use image::{DynamicImage, ImageBuffer, Rgba};
 
 /// Resize an image to the target dimensions using LANCZOS3 filtering.
 pub fn resize_image(
@@ -15,8 +15,9 @@ pub fn resize_image(
     target_height: u32,
 ) -> CoreResult<Vec<u8>> {
     let img = DynamicImage::ImageRgba8(
-        ImageBuffer::from_raw(width, height, pixels.to_vec())
-            .ok_or_else(|| CoreError::InvalidInput("Failed to create image from pixel data".into()))?
+        ImageBuffer::from_raw(width, height, pixels.to_vec()).ok_or_else(|| {
+            CoreError::InvalidInput("Failed to create image from pixel data".into())
+        })?,
     );
 
     let resized = img.resize_exact(
@@ -39,8 +40,9 @@ pub fn crop_image(
     crop_height: u32,
 ) -> CoreResult<Vec<u8>> {
     let img = DynamicImage::ImageRgba8(
-        ImageBuffer::from_raw(width, height, pixels.to_vec())
-            .ok_or_else(|| CoreError::InvalidInput("Failed to create image from pixel data".into()))?
+        ImageBuffer::from_raw(width, height, pixels.to_vec()).ok_or_else(|| {
+            CoreError::InvalidInput("Failed to create image from pixel data".into())
+        })?,
     );
 
     let cropped = img.crop_imm(x, y, crop_width, crop_height);
@@ -56,7 +58,7 @@ pub fn normalize_image(pixels: &[u8]) -> Vec<f32> {
 pub fn to_grayscale(pixels: &[u8], width: u32, height: u32) -> CoreResult<Vec<u8>> {
     let img = DynamicImage::ImageRgba8(
         ImageBuffer::from_raw(width, height, pixels.to_vec())
-            .ok_or_else(|| CoreError::InvalidInput("Failed to create image".into()))?
+            .ok_or_else(|| CoreError::InvalidInput("Failed to create image".into()))?,
     );
 
     Ok(img.to_luma8().into_raw())

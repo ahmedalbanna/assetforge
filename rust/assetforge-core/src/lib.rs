@@ -7,6 +7,9 @@
 //! - Gaussian splat compression (SPZ)
 //! - GLTF/OBJ export helpers
 
+/// The version of the assetforge-core crate.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod error;
 pub mod image_ops;
 pub mod mesh_utils;

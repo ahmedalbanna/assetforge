@@ -13,7 +13,13 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from assetforge.pipelines.base import BasePipeline
+from assetforge.pipelines.base import (
+    BasePipeline,
+    validate_input_image,
+    validate_output_dir,
+    validate_sprite_sizes,
+    clamp,
+)
 
 logger = logging.getLogger("assetforge")
 
@@ -32,12 +38,21 @@ class Pipeline2D(BasePipeline):
         feather_pixels: int = 0,
     ):
         super().__init__(output_dir, name="2d-sprite")
-        self.input_path = Path(input_path).resolve()
+        # Validate inputs (extension check only, existence checked at runtime)
+        self.input_path = validate_input_image(input_path, check_exists=False)
         self.background_remover = background_remover
-        self.sprite_sizes = sprite_sizes or [64, 128, 256]
+        self.sprite_sizes = validate_sprite_sizes(sprite_sizes or [64, 128, 256])
         self.pack_sheet = pack_sheet
         self.generate_vector = generate_vector
-        self.feather_pixels = feather_pixels
+        self.feather_pixels = int(clamp(feather_pixels, 0, 10, "feather_pixels"))
+        self.output_dir = validate_output_dir(output_dir)
+
+        # Validate background remover choice
+        if background_remover not in ("sam2", "rembg"):
+            raise ValueError(
+                f"Unknown background remover: '{background_remover}'. "
+                f"Use 'sam2' or 'rembg'."
+            )
 
         # Intermediate directories
         self.stages_dir = self.output_dir / "stages"

@@ -6,9 +6,11 @@ All pipelines inherit from this base class which provides:
 - Output directory management
 - Logging
 - Error handling
+- Input validation utilities
 """
 
 import logging
+import os
 import time
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -16,6 +18,215 @@ from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger("assetforge")
+
+
+# ── Input Validation Utilities ────────────────────────────────────
+
+
+# Allowed file extensions for input types
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
+ALLOWED_MESH_EXTENSIONS = {".obj", ".glb", ".gltf", ".fbx", ".ply", ".stl"}
+ALLOWED_OUTPUT_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".glb",
+    ".obj",
+    ".fbx",
+    ".svg",
+    ".spz",
+    ".ply",
+}
+
+# Maximum file size (500 MB)
+MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
+
+
+def _resolve_path(path: str | Path) -> Path:
+    """Resolve and normalize a path, checking for path traversal.
+
+    This is the base path resolution that performs safety checks
+    but does NOT require the path to exist (existence should be
+    checked at runtime by the caller).
+
+    Args:
+        path: File path to resolve
+
+    Returns:
+        Resolved Path object
+
+    Raises:
+        ValueError: If the path contains path traversal or is unsafe
+    """
+    p = Path(path).expanduser().resolve()
+
+    # Path traversal check
+    path_str = str(p)
+    if ".." in path_str.split(os.sep):
+        raise ValueError(f"Path contains '..' traversal: {p}")
+
+    return p
+
+
+def validate_input_path(path: str | Path, check_exists: bool = False) -> Path:
+    """Validate and resolve an input file path.
+
+    Args:
+        path: Input file path to validate
+        check_exists: If True, also checks the file exists and its size
+
+    Returns:
+        Resolved Path object
+
+    Raises:
+        FileNotFoundError: If check_exists is True and the file does not exist
+        ValueError: If the path is invalid or too large
+    """
+    p = _resolve_path(path)
+
+    if check_exists:
+        if not p.exists():
+            raise FileNotFoundError(f"Input file not found: {p}")
+        if not p.is_file():
+            raise ValueError(f"Input path is not a file: {p}")
+        try:
+            file_size = p.stat().st_size
+            if file_size > MAX_FILE_SIZE_BYTES:
+                raise ValueError(
+                    f"File too large: {p.name} ({file_size / 1024 / 1024:.1f} MB). "
+                    f"Maximum allowed: {MAX_FILE_SIZE_BYTES / 1024 / 1024:.0f} MB"
+                )
+        except OSError as e:
+            raise ValueError(f"Cannot access file: {p} — {e}")
+
+    return p
+
+
+def validate_input_image(path: str | Path, check_exists: bool = False) -> Path:
+    """Validate an input image path with extension check.
+
+    Args:
+        path: Input image path
+        check_exists: If True, also checks the file exists
+
+    Returns:
+        Resolved Path object
+
+    Raises:
+        ValueError: If extension is not a supported image format
+    """
+    p = validate_input_path(path, check_exists=check_exists)
+
+    ext = p.suffix.lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported image format '{ext}' for '{p.name}'. "
+            f"Allowed: {', '.join(sorted(ALLOWED_IMAGE_EXTENSIONS))}"
+        )
+
+    return p
+
+
+def validate_input_mesh(path: str | Path, check_exists: bool = False) -> Path:
+    """Validate an input mesh path with extension check.
+
+    Args:
+        path: Input mesh path
+        check_exists: If True, also checks the file exists
+
+    Returns:
+        Resolved Path object
+
+    Raises:
+        ValueError: If extension is not a supported mesh format
+    """
+    p = validate_input_path(path, check_exists=check_exists)
+
+    ext = p.suffix.lower()
+    if ext not in ALLOWED_MESH_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported mesh format '{ext}' for '{p.name}'. "
+            f"Allowed: {', '.join(sorted(ALLOWED_MESH_EXTENSIONS))}"
+        )
+
+    return p
+
+
+def validate_output_dir(path: str | Path) -> Path:
+    """Validate and create an output directory.
+
+    Ensures the output directory is within a reasonable location
+    (not in system directories) and creates it if needed.
+
+    Args:
+        path: Output directory path
+
+    Returns:
+        Resolved Path object
+    """
+    p = Path(path).expanduser().resolve()
+
+    # Prevent writing to sensitive system directories
+    # Block writing directly to critical system directories only.
+    # Root (/) is excluded from blocking since all paths are under it.
+    system_dirs = {"/etc", "/bin", "/sbin", "/usr", "/boot", "/sys", "/proc", "/dev"}
+    # Only check the root-most path, not every parent (since all paths are under /)
+    resolved_str = str(p)
+    if resolved_str in system_dirs or any(
+        resolved_str.startswith(d + "/") or resolved_str == d for d in system_dirs
+    ):
+        raise ValueError(f"Cannot write output to system directory: {p}")
+
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def validate_sprite_sizes(sizes: list[int]) -> list[int]:
+    """Validate sprite size values.
+
+    Args:
+        sizes: List of sprite dimensions in pixels
+
+    Returns:
+        Validated list of sizes
+
+    Raises:
+        ValueError: If any size is invalid
+    """
+    if not sizes:
+        raise ValueError("Sprite sizes list cannot be empty")
+
+    validated = []
+    for s in sizes:
+        if not isinstance(s, int) or s <= 0:
+            raise ValueError(f"Invalid sprite size: {s}. Must be a positive integer.")
+        if s > 8192:
+            raise ValueError(f"Sprite size too large: {s}. Maximum allowed: 8192")
+        validated.append(s)
+
+    return sorted(validated)
+
+
+def clamp(value: float, min_val: float, max_val: float, name: str = "value") -> float:
+    """Clamp a numeric value within bounds.
+
+    Args:
+        value: Input value
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value
+        name: Name of the parameter (for error messages)
+
+    Returns:
+        Clamped value
+
+    Raises:
+        ValueError: If value is outside bounds
+    """
+    if value < min_val or value > max_val:
+        raise ValueError(f"{name} must be between {min_val} and {max_val}, got {value}")
+    return value
+
+
+# ── Pipeline Base Class ───────────────────────────────────────────
 
 
 @dataclass

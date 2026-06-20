@@ -8,11 +8,11 @@
 //! - `rasterize_sprite` — Rasterize SVG paths to PNG pixels
 //! - `optimize_mesh` — Simplify mesh vertices/faces
 
-use pyo3::prelude::*;
-use pyo3::exceptions::PyValueError;
+use assetforge_core::mesh_utils::{self, Face, Mesh, Vertex};
+use assetforge_core::splat_compress::{self, CompressionQuality, GaussianSplats};
 use assetforge_core::vectorize::{self, VectorizationConfig};
-use assetforge_core::splat_compress::{self, GaussianSplats, CompressionQuality};
-use assetforge_core::mesh_utils::{self, Mesh, Vertex, Face};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 
 /// Convert a binary bitmap to SVG vector paths.
 ///
@@ -108,8 +108,7 @@ fn rasterize_sprite(
     output_height: u32,
 ) -> PyResult<Vec<u8>> {
     // Parse SVG paths
-    let paths = parse_svg_paths(svg_content)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let paths = parse_svg_paths(svg_content).map_err(|e| PyValueError::new_err(e.to_string()))?;
 
     let pixels = vectorize::rasterize_paths(&paths, output_width, output_height)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -135,31 +134,43 @@ fn optimize_mesh(
 ) -> PyResult<(Vec<[f32; 3]>, Vec<u32>)> {
     if indices.len() % 3 != 0 {
         return Err(PyValueError::new_err(
-            "Indices length must be a multiple of 3"
+            "Indices length must be a multiple of 3",
         ));
     }
 
-    let faces: Vec<Face> = indices.chunks_exact(3).map(|chunk| {
-        Face {
+    let faces: Vec<Face> = indices
+        .chunks_exact(3)
+        .map(|chunk| Face {
             v0: chunk[0] as usize,
             v1: chunk[1] as usize,
             v2: chunk[2] as usize,
-        }
-    }).collect();
+        })
+        .collect();
 
     let mesh = Mesh {
-        vertices: vertices.iter().map(|v| Vertex { x: v[0], y: v[1], z: v[2] }).collect(),
+        vertices: vertices
+            .iter()
+            .map(|v| Vertex {
+                x: v[0],
+                y: v[1],
+                z: v[2],
+            })
+            .collect(),
         faces,
     };
 
     let simplified = mesh_utils::simplify_mesh(&mesh, target_ratio)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-    let out_vertices: Vec<[f32; 3]> = simplified.vertices.iter()
+    let out_vertices: Vec<[f32; 3]> = simplified
+        .vertices
+        .iter()
         .map(|v| [v.x, v.y, v.z])
         .collect();
 
-    let out_indices: Vec<u32> = simplified.faces.iter()
+    let out_indices: Vec<u32> = simplified
+        .faces
+        .iter()
         .flat_map(|f| vec![f.v0 as u32, f.v1 as u32, f.v2 as u32])
         .collect();
 
@@ -177,7 +188,8 @@ fn parse_svg_paths(svg: &str) -> Result<Vec<vectorize::VectorPath>, String> {
         if line.starts_with("<path") {
             // Extract 'd' attribute and parse path data
             if let Some(d_start) = line.find("d=\"") {
-                let d_end = line[d_start + 3..].find('"')
+                let d_end = line[d_start + 3..]
+                    .find('"')
                     .map(|i| d_start + 3 + i)
                     .unwrap_or(line.len());
                 let d_data = &line[d_start + 3..d_end];
@@ -287,7 +299,13 @@ fn parse_svg_path_data(data: &str) -> Option<vectorize::VectorPath> {
     })
 }
 
-fn update_bounds(point: (f64, f64), min_x: &mut f64, min_y: &mut f64, max_x: &mut f64, max_y: &mut f64) {
+fn update_bounds(
+    point: (f64, f64),
+    min_x: &mut f64,
+    min_y: &mut f64,
+    max_x: &mut f64,
+    max_y: &mut f64,
+) {
     *min_x = (*min_x).min(point.0);
     *min_y = (*min_y).min(point.1);
     *max_x = (*max_x).max(point.0);
@@ -303,30 +321,25 @@ fn update_bounds(point: (f64, f64), min_x: &mut f64, min_y: &mut f64, max_x: &mu
 /// Returns:
 ///     Success status
 #[pyfunction]
-fn export_splat_gltf(
-    _py: Python,
-    splat_path: &str,
-    output_path: &str,
-) -> PyResult<bool> {
-    use std::path::Path;
+fn export_splat_gltf(_py: Python, splat_path: &str, output_path: &str) -> PyResult<bool> {
     use std::fs;
+    use std::path::Path;
 
     let splat = Path::new(splat_path);
     let output = Path::new(output_path);
 
     if !splat.exists() {
-        return Err(PyValueError::new_err(
-            format!("Splat file not found: {}", splat_path)
-        ));
+        return Err(PyValueError::new_err(format!(
+            "Splat file not found: {}",
+            splat_path
+        )));
     }
 
     // Read splat data
     let data = fs::read(splat)
         .map_err(|e| PyValueError::new_err(format!("Failed to read splat: {}", e)))?;
 
-    let ext = splat.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("ply");
+    let ext = splat.extension().and_then(|e| e.to_str()).unwrap_or("ply");
 
     match ext {
         "spz" => {
@@ -379,7 +392,10 @@ fn export_splat_gltf(
                 .map_err(|e| PyValueError::new_err(format!("Failed to copy PLY: {}", e)))?;
             Ok(true)
         }
-        _ => Err(PyValueError::new_err(format!("Unsupported splat format: {}", ext))),
+        _ => Err(PyValueError::new_err(format!(
+            "Unsupported splat format: {}",
+            ext
+        ))),
     }
 }
 
@@ -394,6 +410,7 @@ fn pad_to_4(data: &[u8]) -> Vec<u8> {
 /// PyO3 module initialization.
 #[pymodule]
 fn assetforge_pyo3(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(vectorize_bitmap, m)?)?;
     m.add_function(wrap_pyfunction!(compress_splats, m)?)?;
     m.add_function(wrap_pyfunction!(rasterize_sprite, m)?)?;
