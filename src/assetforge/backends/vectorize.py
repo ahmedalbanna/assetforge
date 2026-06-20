@@ -4,6 +4,9 @@ Image vectorization backend — converts raster images to SVG vector graphics.
 Supports:
 - Outline mode: Single-color silhouette vectorization
 - Color mode: Multi-layer vectorization with color quantization
+- Character-Aware mode: Feature-preserving vectorization with face/eye/mouth detection
+- Anime Line Art: Separate stroke layer for thin line art (anime style)
+- Procedural Enhancements: Eye highlights, detail preservation
 
 Uses OpenCV for contour extraction and simplification, with pure-Python SVG generation.
 """
@@ -32,6 +35,23 @@ class ColorVectorizationConfig:
         background_color: SVG background fill (e.g., 'none', 'white', '#FFFFFF').
         max_svg_dimension: If > 0, downscale image before vectorization if max(H,W)
                            exceeds this value (improves performance).
+
+        # Character-aware vectorization options
+        enable_character_features: If True, use face/eye/mouth detection to enhance
+                                   detail in facial regions during vectorization.
+        feature_simplify_tolerance: Lower simplification tolerance for facial feature
+                                    regions (e.g., 0.3-1.0) for more detail.
+        feature_min_area: Smaller minimum contour area for feature regions.
+        preserve_line_art: If True, extract and preserve thin line art (anime style)
+                           as a separate SVG stroke layer.
+        line_art_threshold: Canny edge detection threshold for line art extraction.
+        line_art_color: Color string for the line art stroke layer (e.g., 'black').
+        enable_eye_highlights: If True, add procedural circular highlights to eyes
+                               for more expressive characters.
+        eye_highlight_color: Color for procedural eye highlights (default white).
+        semantic_detail_level: Controls how much extra detail to preserve in feature
+                               regions: 'low', 'medium', or 'high'.
+                               High = lowest simplify_tolerance for features.
     """
 
     num_colors: int = 24
@@ -41,6 +61,17 @@ class ColorVectorizationConfig:
     layer_order: str = "luminance"
     background_color: str = "none"
     max_svg_dimension: int = 0  # 0 = no downscale
+
+    # Character-aware vectorization
+    enable_character_features: bool = False
+    feature_simplify_tolerance: float = 0.5
+    feature_min_area: int = 2
+    preserve_line_art: bool = True
+    line_art_threshold: int = 30
+    line_art_color: str = "black"
+    enable_eye_highlights: bool = True
+    eye_highlight_color: str = "white"
+    semantic_detail_level: str = "high"
 
 
 def _validate_config(config: ColorVectorizationConfig) -> None:
@@ -65,6 +96,27 @@ def _validate_config(config: ColorVectorizationConfig) -> None:
             f"layer_order must be 'luminance', 'area', or 'index', "
             f"got {config.layer_order}"
         )
+    # Character feature validation
+    if config.enable_character_features:
+        if not 0.1 <= config.feature_simplify_tolerance <= 5.0:
+            raise ValueError(
+                f"feature_simplify_tolerance must be between 0.1 and 5.0, "
+                f"got {config.feature_simplify_tolerance}"
+            )
+        if config.feature_min_area < 1:
+            raise ValueError(
+                f"feature_min_area must be >= 1, got {config.feature_min_area}"
+            )
+        if config.semantic_detail_level not in ("low", "medium", "high"):
+            raise ValueError(
+                f"semantic_detail_level must be 'low', 'medium', or 'high', "
+                f"got {config.semantic_detail_level}"
+            )
+        if not 10 <= config.line_art_threshold <= 200:
+            raise ValueError(
+                f"line_art_threshold must be between 10 and 200, "
+                f"got {config.line_art_threshold}"
+            )
 
 
 def quantize_colors(
@@ -178,6 +230,148 @@ def _color_distance_sq(c1: np.ndarray, c2: np.ndarray) -> float:
     da = float(c1[3]) - float(c2[3])
     # Weight alpha less
     return dr * dr + dg * dg + db * db + 0.5 * da * da
+
+
+def _extract_line_art(
+    image: np.ndarray,
+    threshold1: int = 30,
+    threshold2: int = 90,
+    min_line_length: int = 5,
+) -> tuple[list[np.ndarray], np.ndarray]:
+    """Extract thin line art from an image using edge detection.
+
+    Uses Canny edge detection with morphological thinning to produce
+    clean line art suitable for an SVG stroke layer (anime/manga style).
+
+    Args:
+        image: RGB uint8 array, shape (H, W, 3) or RGBA.
+        threshold1: Lower Canny threshold (sensitivity to weak edges).
+        threshold2: Upper Canny threshold (sensitivity to strong edges).
+        min_line_length: Minimum contour length in pixels.
+
+    Returns:
+        Tuple of (contours, edge_mask) where:
+        - contours: List of OpenCV contour arrays for edges.
+        - edge_mask: Binary uint8 edge mask.
+    """
+    if image.shape[2] >= 4:
+        gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_RGB2GRAY)
+    else:
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+
+    # Apply bilateral filter to preserve edges while smoothing color
+    gray = cv2.bilateralFilter(gray, 7, 30, 30)
+
+    # Canny edge detection
+    edges = cv2.Canny(gray, threshold1, threshold2, apertureSize=3)
+
+    # Morphological closure to connect nearby edge segments
+    # Use minimal kernel to avoid erasing thin lines
+    kernel = np.ones((2, 2), np.uint8)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+
+    # Find edge contours
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Filter by length
+    line_contours = []
+    for cnt in contours:
+        length = cv2.arcLength(cnt, closed=False)
+        if length >= min_line_length:
+            # Simplify slightly for smoother lines
+            epsilon = 0.5
+            approx = cv2.approxPolyDP(cnt, epsilon, closed=False)
+            if len(approx) >= 2:
+                line_contours.append(approx)
+
+    return line_contours, edges
+
+
+def _contours_to_svg_strokes(
+    contours: list[np.ndarray],
+    stroke_color: str = "black",
+    stroke_width: float = 1.0,
+) -> str:
+    """Convert edge contours to SVG stroke paths.
+
+    Unlike filled paths, stroke paths don't need to be closed polygons.
+    Each contour becomes an open path (no Z command).
+
+    Args:
+        contours: List of contours, each shape (N, 1, 2).
+        stroke_color: SVG stroke color string.
+        stroke_width: Stroke width in SVG units.
+
+    Returns:
+        SVG path data string(s) suitable for a <path> with stroke.
+    """
+    paths = []
+    for contour in contours:
+        if len(contour) < 2:
+            continue
+        pts = contour[:, 0, :]
+        path_data = f"M {pts[0][0]} {pts[0][1]}"
+        for pt in pts[1:]:
+            path_data += f" L {pt[0]} {pt[1]}"
+        paths.append(path_data)
+
+    if not paths:
+        return ""
+
+    joined = " ".join(paths)
+    return (
+        f'<path d="{joined}" fill="none" '
+        f'stroke="{stroke_color}" stroke-width="{stroke_width}" />'
+    )
+
+
+def _add_eye_highlight_paths(
+    eye_regions: list[tuple[int, int, int, int]],
+    highlight_color: str = "white",
+    highlight_radius_ratio: float = 0.25,
+) -> list[str]:
+    """Generate procedural SVG paths for eye highlights.
+
+    Adds small circular highlights near the top-center of each detected
+    eye region, mimicking the specular reflection that gives eyes life.
+
+    Args:
+        eye_regions: List of (x, y, w, h) bounding boxes for eyes.
+        highlight_color: SVG color for the highlight circles.
+        highlight_radius_ratio: Radius of highlight relative to eye width.
+
+    Returns:
+        List of SVG path element strings.
+    """
+    elements = []
+    for ex, ey, ew, eh in eye_regions:
+        if ew < 4 or eh < 4:
+            continue
+
+        # Highlight position: upper-left quadrant of eye
+        cx = ex + int(ew * 0.35)
+        cy = ey + int(eh * 0.30)
+        r = max(1, int(min(ew, eh) * highlight_radius_ratio))
+
+        # Main highlight
+        elements.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{r}" '
+            f'fill="{highlight_color}" '
+            f'fill-opacity="0.8" />'
+        )
+
+        # Secondary smaller highlight (lower-right) for anime-style sparkle
+        if ew >= 8 and eh >= 6:
+            cx2 = ex + int(ew * 0.60)
+            cy2 = ey + int(eh * 0.55)
+            r2 = max(1, r // 2)
+            elements.append(
+                f'<circle cx="{cx2}" cy="{cy2}" r="{r2}" '
+                f'fill="{highlight_color}" '
+                f'fill-opacity="0.5" />'
+            )
+
+    return elements
 
 
 def separate_layers(
@@ -341,6 +535,11 @@ def vectorize_color(
         config.min_area,
     )
 
+    # Character-aware mode: delegate to feature-enhanced vectorization
+    if config.enable_character_features:
+        logger.info("Character-aware vectorization enabled — detecting features...")
+        return vectorize_color_character_aware(image, config)
+
     # Determine if we need to downscale for performance
     img = image
     scale_factor = 1.0
@@ -412,6 +611,284 @@ def vectorize_color(
     )
 
     return svg_content
+
+
+def _vectorize_feature_region(
+    image_rgba: np.ndarray,
+    region_mask: np.ndarray,
+    config: ColorVectorizationConfig,
+    x_offset: int = 0,
+    y_offset: int = 0,
+) -> list[dict]:
+    """Vectorize a specific region with enhanced detail settings.
+
+    Performs color quantization and layer separation on a sub-region
+    of the image, using tighter simplification and smaller min area
+    for more detail preservation.
+
+    Args:
+        image_rgba: Full RGBA uint8 image.
+        region_mask: Binary uint8 mask (0/255) indicating the region.
+        config: Base vectorization config (feature detail settings used).
+        x_offset: X offset to add to contour coordinates.
+        y_offset: Y offset to add to contour coordinates.
+
+    Returns:
+        List of layer dicts localized to the region.
+    """
+    # Extract region bounding box
+    ys, xs = np.where(region_mask > 0)
+    if len(ys) == 0:
+        return []
+    x1, y1 = xs.min(), ys.min()
+    x2, y2 = xs.max(), ys.max()
+
+    # Pad slightly
+    pad = 5
+    x1 = max(0, x1 - pad)
+    y1 = max(0, y1 - pad)
+    x2 = min(image_rgba.shape[1] - 1, x2 + pad)
+    y2 = min(image_rgba.shape[0] - 1, y2 + pad)
+    sub_w, sub_h = x2 - x1 + 1, y2 - y1 + 1
+
+    if sub_w < 8 or sub_h < 8:
+        return []
+
+    # Extract sub-image
+    sub_img = image_rgba[y1 : y2 + 1, x1 : x2 + 1].copy()
+
+    # Create local mask for this region
+    local_mask = region_mask[y1 : y2 + 1, x1 : x2 + 1].copy()
+
+    # Apply mask: zero out pixels outside the region (they become transparent)
+    sub_img[local_mask == 0] = [0, 0, 0, 0]
+
+    # Create config with feature-level detail
+    feature_config = ColorVectorizationConfig(
+        num_colors=max(8, min(config.num_colors, 32)),
+        simplify_tolerance=config.feature_simplify_tolerance,
+        min_area=config.feature_min_area,
+        color_tolerance=config.color_tolerance,
+        layer_order=config.layer_order,
+        background_color=config.background_color,
+    )
+
+    # Quantize colors on the sub-region
+    quantized, palette = quantize_colors(sub_img, feature_config.num_colors)
+
+    # Separate layers
+    raw_layers = separate_layers(quantized, palette, feature_config)
+
+    # Offset contour coordinates back to full image space
+    offset_layers = []
+    for layer in raw_layers:
+        adjusted_contours = []
+        for contour in layer["contours"]:
+            pts = contour[:, 0, :].copy()
+            pts[:, 0] += x1 + x_offset
+            pts[:, 1] += y1 + y_offset
+            adjusted = pts.reshape(-1, 1, 2).astype(np.int32)
+            adjusted_contours.append(adjusted)
+
+        offset_layers.append(
+            {
+                "color": layer["color"],
+                "contours": adjusted_contours,
+                "area": layer["area"],
+                "luminance": layer["luminance"],
+                "index": layer["index"],
+                "feature_layer": True,  # Mark as feature overlay
+            }
+        )
+
+    return offset_layers
+
+
+def vectorize_color_character_aware(
+    image: np.ndarray,
+    config: ColorVectorizationConfig,
+) -> str:
+    """Vectorize an image with character feature-aware enhancement.
+
+    Performs multi-pass vectorization:
+    1. Standard pass: full image with base config (for background, clothes, hair)
+    2. Feature pass: face/eyes/mouth regions with enhanced detail
+    3. Line art pass: extract thin edges as separate stroke layer
+    4. Procedural pass: add eye highlights
+
+    Args:
+        image: RGBA uint8 array, shape (H, W, 4).
+        config: Vectorization configuration with character features enabled.
+
+    Returns:
+        SVG string with enhanced character details.
+    """
+    from assetforge.backends.character_features import (
+        DetectionMethod,
+        detect_character_features,
+        enhance_feature_masks,
+    )
+
+    h, w = image.shape[:2]
+
+    # Ensure RGBA
+    img = image.copy()
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGBA)
+    elif img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2RGBA)
+
+    # Step 1: Detect character features
+    rgb_img = img[:, :, :3]
+    features = detect_character_features(
+        rgb_img,
+        method=DetectionMethod.AUTO,
+        min_face_size=30,
+        min_confidence=0.4,
+    )
+    features = enhance_feature_masks(rgb_img, features, dilation_kernel=3)
+
+    # SVG building
+    svg_parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{w}" height="{h}" '
+        f'viewBox="0 0 {w} {h}">',
+    ]
+
+    # Background rect if needed
+    if config.background_color.lower() != "none":
+        svg_parts.append(
+            f'<rect width="{w}" height="{h}" fill="{config.background_color}" />'
+        )
+
+    # Step 2: Base vectorization (full image with standard settings)
+    # Quantize colors
+    quantized, palette = quantize_colors(img, config.num_colors)
+    base_layers = separate_layers(quantized, palette, config)
+
+    # If no face detected, just use standard vectorization
+    if not features.face_detected:
+        logger.info("No face detected — falling back to standard vectorization")
+        # Still try line art if enabled
+        all_layers = base_layers
+
+        # Combine into SVG
+        for layer in all_layers:
+            r, g, b, a = layer["color"]
+            fill = f"rgb({r},{g},{b})"
+            opacity = a / 255.0
+            path_data = _contours_to_svg_paths(layer["contours"])
+            if not path_data:
+                continue
+            if opacity < 1.0:
+                svg_parts.append(
+                    f'<path d="{path_data}" fill="{fill}" '
+                    f'fill-opacity="{opacity:.3f}" />'
+                )
+            else:
+                svg_parts.append(f'<path d="{path_data}" fill="{fill}" />')
+
+        # Line art layer
+        if config.preserve_line_art:
+            line_contours, _ = _extract_line_art(
+                rgb_img,
+                threshold1=config.line_art_threshold,
+                threshold2=config.line_art_threshold * 3,
+            )
+            line_art = _contours_to_svg_strokes(
+                line_contours, stroke_color=config.line_art_color
+            )
+            if line_art:
+                svg_parts.append(line_art)
+
+        svg_parts.append("</svg>")
+        return "\n".join(svg_parts)
+
+    logger.info(
+        "Character-aware vectorization: face detected (%d eyes, mouth=%s)",
+        len(features.eye_regions),
+        features.mouth_region is not None,
+    )
+
+    # Step 3: Extract feature-specific layers with higher detail
+    feature_layers_map: dict[str, list[dict]] = {}
+
+    for feature_name in ("face", "left_eye", "right_eye", "mouth"):
+        mask = features.feature_masks.get(feature_name)
+        if mask is not None and mask.sum() > 0:
+            feature_layers = _vectorize_feature_region(
+                img,
+                mask,
+                config,
+            )
+            if feature_layers:
+                feature_layers_map[feature_name] = feature_layers
+
+    # Step 4: Merge layers — base first, then feature overlays on top
+    # Remove any base layers that overlap with feature regions entirely
+    # (feature layers will be rendered on top, so base layers underneath are fine)
+
+    # Write base layers
+    for layer in base_layers:
+        r, g, b, a = layer["color"]
+        fill = f"rgb({r},{g},{b})"
+        opacity = a / 255.0
+        path_data = _contours_to_svg_paths(layer["contours"])
+        if not path_data:
+            continue
+        if opacity < 1.0:
+            svg_parts.append(
+                f'<path d="{path_data}" fill="{fill}" fill-opacity="{opacity:.3f}" />'
+            )
+        else:
+            svg_parts.append(f'<path d="{path_data}" fill="{fill}" />')
+
+    # Write face feature overlay layers
+    # Order: face base → mouth → eyes (so eyes are on top)
+    face_features_order = ["face", "mouth", "left_eye", "right_eye"]
+    for feat_name in face_features_order:
+        f_layers = feature_layers_map.get(feat_name, [])
+        # Sort by luminance so darker details render on top
+        f_layers.sort(key=lambda x: x["luminance"])
+        for layer in f_layers:
+            r, g, b, a = layer["color"]
+            fill = f"rgb({r},{g},{b})"
+            opacity = a / 255.0
+            path_data = _contours_to_svg_paths(layer["contours"])
+            if not path_data:
+                continue
+            if opacity < 1.0:
+                svg_parts.append(
+                    f'<path d="{path_data}" fill="{fill}" '
+                    f'fill-opacity="{opacity:.3f}" />'
+                )
+            else:
+                svg_parts.append(f'<path d="{path_data}" fill="{fill}" />')
+
+    # Step 5: Line art layer (anime style strokes)
+    if config.preserve_line_art:
+        line_contours, _ = _extract_line_art(
+            rgb_img,
+            threshold1=config.line_art_threshold,
+            threshold2=config.line_art_threshold * 3,
+        )
+        line_art = _contours_to_svg_strokes(
+            line_contours, stroke_color=config.line_art_color
+        )
+        if line_art:
+            svg_parts.append(line_art)
+
+    # Step 6: Procedural eye highlights
+    if config.enable_eye_highlights and features.eye_regions:
+        highlights = _add_eye_highlight_paths(
+            features.eye_regions,
+            highlight_color=config.eye_highlight_color,
+        )
+        svg_parts.extend(highlights)
+
+    svg_parts.append("</svg>")
+    return "\n".join(svg_parts)
 
 
 def vectorize_outline(

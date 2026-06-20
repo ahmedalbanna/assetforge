@@ -355,6 +355,30 @@ print('  ✓ Rembg session ready')
 " 2>/dev/null && ok "Rembg model cached" || warn "Rembg model download skipped"
   fi
 
+  # OpenCV DNN face detection model (for character features)
+  info "Pre-caching OpenCV DNN face detection model..."
+  python3 -c "
+import urllib.request, os
+model_dir = os.path.expanduser('~/.cache/assetforge/models')
+os.makedirs(model_dir, exist_ok=True)
+proto = os.path.join(model_dir, 'deploy.prototxt')
+model = os.path.join(model_dir, 'res10_300x300_ssd_iter_140000.caffemodel')
+if not os.path.exists(model):
+    print('  ○ Downloading face detector prototxt...')
+    urllib.request.urlretrieve(
+        'https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt',
+        proto
+    )
+    print('  ○ Downloading face detector model (~10 MB)...')
+    urllib.request.urlretrieve(
+        'https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel',
+        model
+    )
+    print('  ✓ Face detection model cached')
+else:
+    print('  ✓ Already cached')
+" 2>/dev/null && ok "Face detection model cached" || warn "Face detection model download skipped"
+
   ok "Model downloads complete"
 }
 

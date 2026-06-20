@@ -71,6 +71,30 @@ python -c "
 print('  ✓ Will download on first pipeline run')
 "  2>/dev/null
 
+# 6. OpenCV DNN face detection (for character features)
+echo "[6/6] Pre-caching OpenCV DNN face detection model..."
+python -c "
+import urllib.request, os
+model_dir = os.path.expanduser('~/.cache/assetforge/models')
+os.makedirs(model_dir, exist_ok=True)
+proto = os.path.join(model_dir, 'deploy.prototxt')
+model = os.path.join(model_dir, 'res10_300x300_ssd_iter_140000.caffemodel')
+if not os.path.exists(model):
+    print('  ○ Downloading face detector prototxt...')
+    urllib.request.urlretrieve(
+        'https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt',
+        proto
+    )
+    print('  ○ Downloading face detector model (~10 MB)...')
+    urllib.request.urlretrieve(
+        'https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel',
+        model
+    )
+    print('  ✓ Face detection model cached')
+else:
+    print('  ✓ Already cached')
+" 2>/dev/null || echo "  ⚠ SKIP (could not download face detection model)"
+
 echo ""
 echo "=== Download complete ==="
 echo ""

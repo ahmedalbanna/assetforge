@@ -51,6 +51,14 @@ def run_2d_pipeline(
     simplify_tolerance: float,
     min_area: int,
     feather: int,
+    # Character feature options
+    enable_character_features: bool,
+    feature_simplify_tolerance: float,
+    feature_min_area: int,
+    preserve_line_art: bool,
+    line_art_threshold: int,
+    enable_eye_highlights: bool,
+    semantic_detail_level: str,
     progress=gr.Progress(),
 ):
     """Run 2D sprite pipeline and return output paths."""
@@ -84,6 +92,14 @@ def run_2d_pipeline(
         simplify_tolerance=simplify_tolerance,
         min_area=min_area,
         feather_pixels=feather,
+        # Character feature options
+        enable_character_features=enable_character_features,
+        feature_simplify_tolerance=feature_simplify_tolerance,
+        feature_min_area=feature_min_area,
+        preserve_line_art=preserve_line_art,
+        line_art_threshold=line_art_threshold,
+        enable_eye_highlights=enable_eye_highlights,
+        semantic_detail_level=semantic_detail_level,
     )
 
     progress(0.3, desc="Running 2D pipeline...")
@@ -489,6 +505,65 @@ def create_ui():
                                     info="Minimum contour size to include",
                                 )
 
+                            # Character features (collapsible)
+                            with gr.Accordion(
+                                "Character Features (face-aware detail)", open=False
+                            ):
+                                enable_character_features = gr.Checkbox(
+                                    label="Enable Character Features",
+                                    value=False,
+                                    info="Detect face, eyes, mouth and preserve detail in those regions",
+                                )
+                                with gr.Column(visible=False) as char_opts:
+                                    feature_simplify_tolerance = gr.Slider(
+                                        label="Feature Simplify Tolerance",
+                                        minimum=0.1,
+                                        maximum=3.0,
+                                        value=0.5,
+                                        step=0.1,
+                                        info="Lower = more detail in eyes/mouth (0.1-3.0)",
+                                    )
+                                    feature_min_area = gr.Slider(
+                                        label="Feature Min Area (px)",
+                                        minimum=1,
+                                        maximum=30,
+                                        value=2,
+                                        step=1,
+                                        info="Minimum contour size for facial features",
+                                    )
+                                    with gr.Row():
+                                        preserve_line_art = gr.Checkbox(
+                                            label="Line Art (anime strokes)",
+                                            value=True,
+                                            info="Extract thin edges as stroke layer",
+                                        )
+                                        enable_eye_highlights = gr.Checkbox(
+                                            label="Eye Highlights",
+                                            value=True,
+                                            info="Add procedural eye highlights",
+                                        )
+                                    line_art_threshold = gr.Slider(
+                                        label="Line Art Threshold",
+                                        minimum=10,
+                                        maximum=150,
+                                        value=30,
+                                        step=5,
+                                        info="Lower = more lines detected",
+                                    )
+                                    semantic_detail_level = gr.Dropdown(
+                                        label="Detail Level",
+                                        choices=["low", "medium", "high"],
+                                        value="high",
+                                        info="How much extra detail for facial features",
+                                    )
+
+                                # Show/hide character feature options based on checkbox
+                                enable_character_features.change(
+                                    fn=lambda x: gr.update(visible=x),
+                                    inputs=[enable_character_features],
+                                    outputs=[char_opts],
+                                )
+
                         run_btn_2d = gr.Button(
                             "🚀 Generate Sprites", variant="primary", size="lg"
                         )
@@ -557,6 +632,13 @@ def create_ui():
                         simplify_tolerance,
                         min_area,
                         feather,
+                        enable_character_features,
+                        feature_simplify_tolerance,
+                        feature_min_area,
+                        preserve_line_art,
+                        line_art_threshold,
+                        enable_eye_highlights,
+                        semantic_detail_level,
                     ],
                     outputs=[
                         sprite_gallery,

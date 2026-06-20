@@ -47,9 +47,14 @@ hunyuan3d = ["hy3dgen"]
 trellis = ["trellis2"]
 all-3dgen = ["assetforge[triposr,hunyuan3d,trellis]"]
 
+# Character features (face/eye/mouth detection for enhanced vectorization)
+character = [
+    "opencv-python>=4.8.0",
+]
+
 # Complete install
 all = [
-    "assetforge[sam2,rembg,triposr,hunyuan3d,trellis]",
+    "assetforge[sam2,rembg,triposr,hunyuan3d,trellis,character]",
     "huggingface_hub>=0.20",
     "scipy>=1.10",
     "trimesh>=4.0",

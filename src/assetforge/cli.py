@@ -105,7 +105,8 @@ def cmd_2d(
     vectorize_mode: str = typer.Option(
         "outline",
         "--vectorize-mode",
-        help="Vectorization mode: 'outline' (silhouette) or 'color' (multi-layer)",
+        help="Vectorization mode: 'outline' (silhouette), 'color' (multi-layer), "
+        "or 'color' + --character-features (face-aware detail)",
     ),
     num_colors: int = typer.Option(
         24,
@@ -126,6 +127,51 @@ def cmd_2d(
         "--min-area",
         help="Minimum contour area in pixels for vectorization",
         min=1,
+    ),
+    # Character feature options
+    character_features: bool = typer.Option(
+        False,
+        "--character-features",
+        help="Enable face-aware vectorization: detect eyes, mouth, face and "
+        "preserve detail in those regions",
+    ),
+    feature_simplify_tolerance: float = typer.Option(
+        0.5,
+        "--feature-simplify",
+        help="Simplification tolerance for facial features (0.1-5.0). "
+        "Lower = more detail in eyes/mouth",
+        min=0.1,
+        max=5.0,
+    ),
+    feature_min_area: int = typer.Option(
+        2,
+        "--feature-min-area",
+        help="Minimum contour area for facial features in pixels",
+        min=1,
+    ),
+    preserve_line_art: bool = typer.Option(
+        True,
+        "--line-art/--no-line-art",
+        help="Extract thin line art as separate SVG stroke layer (anime style)",
+    ),
+    line_art_threshold: int = typer.Option(
+        30,
+        "--line-art-threshold",
+        help="Edge detection threshold for line art (10-200). "
+        "Lower = more lines detected",
+        min=10,
+        max=200,
+    ),
+    eye_highlights: bool = typer.Option(
+        True,
+        "--eye-highlights/--no-eye-highlights",
+        help="Add procedural eye highlight circles for expressive characters",
+    ),
+    detail_level: str = typer.Option(
+        "high",
+        "--detail-level",
+        help="Semantic detail level: 'low', 'medium', 'high'. "
+        "Controls how many extra colors are allocated to facial features",
     ),
 ):
     """Extract a 2D sprite from an image and prepare it for game engines."""
@@ -153,6 +199,13 @@ def cmd_2d(
         num_colors=num_colors,
         simplify_tolerance=simplify_tolerance,
         min_area=min_area,
+        enable_character_features=character_features,
+        feature_simplify_tolerance=feature_simplify_tolerance,
+        feature_min_area=feature_min_area,
+        preserve_line_art=preserve_line_art,
+        line_art_threshold=line_art_threshold,
+        enable_eye_highlights=eye_highlights,
+        semantic_detail_level=detail_level,
     )
     pipeline.run()
 

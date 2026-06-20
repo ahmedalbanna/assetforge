@@ -4,9 +4,14 @@
 Stages:
 1. Background removal (SAM2 or Rembg)
 2. Edge cleanup (OpenCV)
-3. Vectorization (Rust outline or Python color) [optional]
-4. Sprite rasterization at target sizes
-5. Sprite sheet packing [optional]
+3. Character feature detection [optional, when --character-features set]
+4. Vectorization (Rust outline, Python color, or character-aware) [optional]
+5. Sprite rasterization at target sizes
+6. Sprite sheet packing [optional]
+
+Character feature detection enhances SVG vectorization by preserving
+facial details (eyes, mouth) and optionally adding line art (anime style)
+and procedural eye highlights.
 """
 
 import logging
@@ -25,6 +30,7 @@ logger = logging.getLogger("assetforge")
 
 # Valid vectorization modes
 VALID_VECTORIZE_MODES = {"outline", "color"}
+VALID_DETAIL_LEVELS = {"low", "medium", "high"}
 
 
 class Pipeline2D(BasePipeline):
@@ -51,6 +57,14 @@ class Pipeline2D(BasePipeline):
         num_colors: int = 24,
         simplify_tolerance: float = 1.5,
         min_area: int = 10,
+        # Character feature options
+        enable_character_features: bool = False,
+        feature_simplify_tolerance: float = 0.5,
+        feature_min_area: int = 2,
+        preserve_line_art: bool = True,
+        line_art_threshold: int = 30,
+        enable_eye_highlights: bool = True,
+        semantic_detail_level: str = "high",
     ):
         super().__init__(output_dir, name="2d-sprite")
         self.input_path = validate_input_image(input_path, check_exists=False)
@@ -82,6 +96,26 @@ class Pipeline2D(BasePipeline):
             simplify_tolerance, 0.5, 5.0, "simplify_tolerance"
         )
         self.min_area = int(clamp(min_area, 1, 10000, "min_area"))
+        # Character feature parameters
+        self.enable_character_features = enable_character_features
+        self.feature_simplify_tolerance = clamp(
+            feature_simplify_tolerance, 0.1, 5.0, "feature_simplify_tolerance"
+        )
+        self.feature_min_area = int(
+            clamp(feature_min_area, 1, 1000, "feature_min_area")
+        )
+        self.preserve_line_art = preserve_line_art
+        self.line_art_threshold = int(
+            clamp(line_art_threshold, 10, 200, "line_art_threshold")
+        )
+        self.enable_eye_highlights = enable_eye_highlights
+        if semantic_detail_level not in VALID_DETAIL_LEVELS:
+            raise ValueError(
+                f"semantic_detail_level must be one of "
+                f"{', '.join(sorted(VALID_DETAIL_LEVELS))}, "
+                f"got '{semantic_detail_level}'"
+            )
+        self.semantic_detail_level = semantic_detail_level
         self.output_dir = validate_output_dir(output_dir)
 
         # Validate background remover choice
@@ -120,14 +154,22 @@ class Pipeline2D(BasePipeline):
         # Stage 2: Edge cleanup
         self.run_stage("edge_cleanup", self._cleanup_edges)
 
-        # Stage 3: Vectorization (optional)
+        # Stage 3: Character feature detection (optional, for vectorization)
+        if (
+            self.generate_vector
+            and self.enable_character_features
+            and self.vectorize_mode == "color"
+        ):
+            self.run_stage("character_features", self._detect_character_features)
+
+        # Stage 4: Vectorization (optional)
         if self.generate_vector:
             if self.vectorize_mode == "outline":
                 self.run_stage("vectorization", self._vectorize_outline)
             else:
                 self.run_stage("vectorization", self._vectorize_color)
 
-        # Stage 4: Rasterize sprites
+        # Stage 5: Rasterize sprites
         self.run_stage("sprite_rasterization", self._rasterize_sprites)
 
         # Stage 5: Sprite sheet (optional)
@@ -173,6 +215,58 @@ class Pipeline2D(BasePipeline):
         cv2.imwrite(str(output_path), input_img)
         self._cleaned_path = output_path
         return [output_path]
+
+    def _detect_character_features(self) -> list[Path]:
+        """Detect facial features for enhanced vectorization.
+
+        Runs feature detection and saves a visualization overlay for debugging.
+        The detected features are stored and used by _vectorize_color.
+        """
+        self.require_attr("_cleaned_path", "edge_cleanup")
+        import cv2
+        import numpy as np
+
+        from assetforge.backends.character_features import (
+            DetectionMethod,
+            detect_character_features,
+            visualize_features,
+        )
+
+        img = cv2.imread(str(self._cleaned_path), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise RuntimeError(f"Failed to read image: {self._cleaned_path}")
+
+        # Convert to RGB for feature detection
+        if img.shape[2] == 4:
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+        else:
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Detect features
+        features = detect_character_features(
+            img_rgb[:, :, :3],
+            method=DetectionMethod.AUTO,
+            min_face_size=30,
+            min_confidence=0.4,
+        )
+
+        # Store for use by vectorization stage
+        self._character_features = features
+
+        # Save visualization for debugging
+        vis_path = self.stages_dir / "03_features.png"
+        vis = visualize_features(img_rgb[:, :, :3], features)
+        cv2.imwrite(str(vis_path), vis)
+
+        logger.info(
+            "Character features: face=%s, %d eyes, mouth=%s, confidence=%.2f",
+            features.face_detected,
+            len(features.eye_regions),
+            features.mouth_region is not None,
+            features.face_confidence,
+        )
+
+        return [vis_path]
 
     def _vectorize_outline(self) -> list[Path]:
         """Convert cleaned bitmap to SVG vector paths using Rust backend (outline mode)."""
@@ -271,10 +365,18 @@ class Pipeline2D(BasePipeline):
         else:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+        # Build config with character feature settings
         config = ColorVectorizationConfig(
             num_colors=self.num_colors,
             simplify_tolerance=self.simplify_tolerance,
             min_area=self.min_area,
+            enable_character_features=self.enable_character_features,
+            feature_simplify_tolerance=self.feature_simplify_tolerance,
+            feature_min_area=self.feature_min_area,
+            preserve_line_art=self.preserve_line_art,
+            line_art_threshold=self.line_art_threshold,
+            enable_eye_highlights=self.enable_eye_highlights,
+            semantic_detail_level=self.semantic_detail_level,
         )
 
         svg_content = vectorize_color(img_rgb, config)
