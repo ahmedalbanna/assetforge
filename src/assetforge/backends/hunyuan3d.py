@@ -31,6 +31,7 @@ class Hunyuan3DBackend:
         output_path: str,
         pbr: bool = True,
         tex_resolution: int = 2048,
+        **kwargs,
     ) -> Path:
         """Generate a 3D mesh from a single image with PBR textures.
 

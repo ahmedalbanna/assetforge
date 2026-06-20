@@ -53,7 +53,7 @@ class TripoSRBackend:
         "imageio-ffmpeg",
         "rembg",
         "huggingface_hub",
-        "transformers",
+        "transformers>=4.48",
         "xatlas",
     ]
 
@@ -134,6 +134,29 @@ class TripoSRBackend:
             )
         except subprocess.TimeoutExpired:
             logger.warning("Dependency install timed out. Try manually.")
+
+        # Fix numpy ABI compatibility — force-reinstall after other deps
+        # to ensure all C extensions match the loaded numpy version
+        try:
+            import numpy
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    "--force-reinstall",
+                    "-q",
+                    f"numpy=={numpy.__version__}",
+                ],
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+        except Exception:
+            pass  # Non-fatal; may just cause a import error later
 
     @staticmethod
     def _remap_vit_state_dict(state_dict: dict) -> dict:

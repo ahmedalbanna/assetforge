@@ -33,6 +33,7 @@ class TRELLISBackend:
         tex_resolution: int = 2048,
         guidance_scale: float = 7.5,
         inference_steps: int = 50,
+        **kwargs,
     ) -> Path:
         """Generate a 3D asset from a single image using TRELLIS 2.
 
