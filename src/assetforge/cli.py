@@ -51,7 +51,9 @@ def cmd_2d(
     input: str = typer.Argument(..., help="Input image path (JPG/PNG)"),
     output: str = typer.Option("./output", "-o", "--output", help="Output directory"),
     background_remover: str = typer.Option(
-        "sam2", "--bg-remover", help="Background removal model: 'sam2' or 'rembg'"
+        "rembg",
+        "--bg-remover",
+        help="Background removal model: 'rembg' (default) or 'sam2'",
     ),
     sprite_sizes: str = typer.Option(
         "64,128,256", "--sprite-sizes", help="Comma-separated output sprite sizes"

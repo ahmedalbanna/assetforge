@@ -31,7 +31,7 @@ class Pipeline2D(BasePipeline):
         self,
         input_path: str,
         output_dir: str = "./output",
-        background_remover: str = "sam2",
+        background_remover: str = "rembg",
         sprite_sizes: list[int] | None = None,
         pack_sheet: bool = False,
         generate_vector: bool = False,
@@ -105,6 +105,7 @@ class Pipeline2D(BasePipeline):
 
     def _cleanup_edges(self) -> list[Path]:
         """Clean up sprite edges using OpenCV."""
+        self.require_attr("_foreground_path", "background_removal")
         import cv2
         import numpy as np
 
@@ -123,6 +124,7 @@ class Pipeline2D(BasePipeline):
 
     def _vectorize(self) -> list[Path]:
         """Convert cleaned bitmap to SVG vector paths using Rust backend."""
+        self.require_attr("_cleaned_path", "edge_cleanup")
         try:
             from assetforge_pyo3 import vectorize_bitmap
         except ImportError:
@@ -151,6 +153,7 @@ class Pipeline2D(BasePipeline):
 
     def _rasterize_sprites(self) -> list[Path]:
         """Rasterize the cleaned sprite at each target size."""
+        self.require_attr("_cleaned_path", "edge_cleanup")
         from PIL import Image
 
         sprite = Image.open(self._cleaned_path).convert("RGBA")
