@@ -24,12 +24,17 @@ print('  ✓ Downloaded')
 " 2>/dev/null || echo "  ⚠ SKIP (run: pip install huggingface_hub && python -c \"from huggingface_hub import hf_hub_download; hf_hub_download('facebook/sam2-hiera-large', 'sam2_hiera_large.pt', cache_dir='$CACHE_DIR')\")"
 fi
 
-# 2. Rembg (U²-Net) — auto-downloaded on first use
-echo "[2/5] Rembg (U²-Net) — auto-downloaded on first use"
+# 2. Rembg models (U²-Net, IS-Net, etc.) — pre-cache common variants
+echo "[2/5] Rembg models — pre-caching common variants..."
 python -c "
 import rembg
-rembg.new_session()
-print('  ✓ Ready')
+print('  ○ Pre-caching default (u2net)...')
+rembg.new_session('u2net')
+print('  ○ Pre-caching isnet-general-use...')
+rembg.new_session('isnet-general-use')
+print('  ○ Pre-caching u2net_human_seg...')
+rembg.new_session('u2net_human_seg')
+print('  ✓ Rembg models cached')
 " 2>/dev/null || echo "  ⚠ SKIP (run: pip install rembg)"
 
 # 3. TripoSR

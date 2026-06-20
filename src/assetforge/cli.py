@@ -50,34 +50,109 @@ def cli_callback(
 def cmd_2d(
     input: str = typer.Argument(..., help="Input image path (JPG/PNG)"),
     output: str = typer.Option("./output", "-o", "--output", help="Output directory"),
+    # Background removal options
     background_remover: str = typer.Option(
         "rembg",
         "--bg-remover",
-        help="Background removal model: 'rembg' (default) or 'sam2'",
+        help="Background removal: 'rembg' (default) or 'sam2'",
     ),
+    bg_model: str = typer.Option(
+        "",
+        "--bg-model",
+        help=(
+            "Rembg model: u2net, u2netp, u2net_human_seg, isnet-general-use,"
+            " isnet-anime, silueta (default: auto-select)"
+        ),
+    ),
+    alpha_matting: bool = typer.Option(
+        False,
+        "--alpha-matting",
+        help="Enable alpha matting for smoother edges (Rembg only)",
+    ),
+    alpha_matting_foreground_threshold: int = typer.Option(
+        240,
+        "--alpha-matting-fg",
+        help="Alpha matting foreground threshold (0-255)",
+        min=0,
+        max=255,
+    ),
+    alpha_matting_background_threshold: int = typer.Option(
+        10,
+        "--alpha-matting-bg",
+        help="Alpha matting background threshold (0-255)",
+        min=0,
+        max=255,
+    ),
+    alpha_matting_erode_size: int = typer.Option(
+        10,
+        "--alpha-matting-erode",
+        help="Alpha matting erode size in pixels",
+        min=0,
+        max=100,
+    ),
+    # Sprite options
     sprite_sizes: str = typer.Option(
         "64,128,256", "--sprite-sizes", help="Comma-separated output sprite sizes"
     ),
     sheet: bool = typer.Option(
         False, "--sheet", help="Pack sprites into a sprite sheet"
     ),
+    feather: int = typer.Option(0, "--feather", help="Edge feather radius in pixels"),
+    # Vectorization options
     vectorize: bool = typer.Option(
         False, "--vectorize", help="Also output SVG vector paths"
     ),
-    feather: int = typer.Option(0, "--feather", help="Edge feather radius in pixels"),
+    vectorize_mode: str = typer.Option(
+        "outline",
+        "--vectorize-mode",
+        help="Vectorization mode: 'outline' (silhouette) or 'color' (multi-layer)",
+    ),
+    num_colors: int = typer.Option(
+        24,
+        "--num-colors",
+        help="Number of colors for color vectorization (4-64)",
+        min=4,
+        max=64,
+    ),
+    simplify_tolerance: float = typer.Option(
+        1.5,
+        "--simplify-tolerance",
+        help="Path simplification tolerance in pixels (0.5-5.0)",
+        min=0.5,
+        max=5.0,
+    ),
+    min_area: int = typer.Option(
+        10,
+        "--min-area",
+        help="Minimum contour area in pixels for vectorization",
+        min=1,
+    ),
 ):
     """Extract a 2D sprite from an image and prepare it for game engines."""
     from assetforge.pipelines.pipeline_2d import Pipeline2D
 
     sizes = [int(s.strip()) for s in sprite_sizes.split(",")]
+
+    # Pass bg_model=None if empty string (use rembg default)
+    bg_model_val = bg_model if bg_model else None
+
     pipeline = Pipeline2D(
         input_path=input,
         output_dir=output,
         background_remover=background_remover,
+        bg_model=bg_model_val,
+        alpha_matting=alpha_matting,
+        alpha_matting_foreground_threshold=alpha_matting_foreground_threshold,
+        alpha_matting_background_threshold=alpha_matting_background_threshold,
+        alpha_matting_erode_size=alpha_matting_erode_size,
         sprite_sizes=sizes,
         pack_sheet=sheet,
-        generate_vector=vectorize,
         feather_pixels=feather,
+        generate_vector=vectorize,
+        vectorize_mode=vectorize_mode,
+        num_colors=num_colors,
+        simplify_tolerance=simplify_tolerance,
+        min_area=min_area,
     )
     pipeline.run()
 

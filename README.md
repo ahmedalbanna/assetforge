@@ -54,12 +54,13 @@ assetforge info
 ## Pipelines
 
 ### 1. 2D Sprite Pipeline
-Extract clean, game-ready sprites from photographs.
+Extract clean, game-ready sprites from photographs. Supports **outline** (silhouette) and **multi-color** vectorization.
 
 ```
 Input Image → Background Removal → Edge Cleanup → Rasterize → SVG Export
-                    ↓
-           SAM2 or Rembg        Optional feathering    Multi-size sprites
+                    ↓                                       ↓
+       SAM2 or Rembg (with model      Optional feathering   Outline or Color
+       selection & alpha matting)                           vectorization (16-32 colors)
 ```
 
 ```bash
@@ -70,16 +71,21 @@ assetforge 2d character.png
 assetforge 2d character.png \
   -o ./sprites \
   --bg-remover rembg \
+  --bg-model isnet-general-use \
+  --alpha-matting \
   --sprite-sizes 32,64,128,256 \
   --sheet \
   --vectorize \
+  --vectorize-mode color \
+  --num-colors 24 \
+  --simplify-tolerance 1.5 \
   --feather 1
 ```
 
 **Output:**
 - `sprite_{size}x{size}.png` — RGBA sprites at each requested size
 - `spritesheet.png` + `spritesheet.json` — Packed sprite sheet (optional)
-- `output.svg` — SVG vector paths (optional)
+- `sprite.svg` — SVG vector paths (optional, outline or multi-color)
 
 ---
 
@@ -215,13 +221,27 @@ Usage: assetforge 2d [OPTIONS] INPUT
 Arguments:
   INPUT  Input image path (JPG/PNG)
 
-Options:
-  -o, --output TEXT       Output directory  [default: ./output]
-  --bg-remover TEXT       Background removal: 'sam2' or 'rembg'  [default: rembg]
-  --sprite-sizes TEXT     Comma-separated output sizes  [default: 64,128,256]
-  --sheet                 Pack sprites into a sprite sheet
-  --vectorize             Also output SVG vector paths
-  --feather INTEGER       Edge feather radius in pixels  [default: 0]
+Background Removal Options:
+  --bg-remover TEXT        Background removal: 'sam2' or 'rembg'  [default: rembg]
+  --bg-model TEXT          Rembg model: u2net, u2netp, u2net_human_seg,
+                           isnet-general-use, isnet-anime, silueta  [default: auto]
+  --alpha-matting          Enable alpha matting for smoother edges (Rembg only)
+  --alpha-matting-fg INT   Alpha matting foreground threshold  [default: 240]
+  --alpha-matting-bg INT   Alpha matting background threshold  [default: 10]
+  --alpha-matting-erode INT  Alpha matting erode size  [default: 10]
+
+Sprite Options:
+  -o, --output TEXT        Output directory  [default: ./output]
+  --sprite-sizes TEXT      Comma-separated output sizes  [default: 64,128,256]
+  --sheet                  Pack sprites into a sprite sheet
+  --feather INTEGER        Edge feather radius in pixels  [default: 0]
+
+Vectorization Options:
+  --vectorize              Also output SVG vector paths
+  --vectorize-mode TEXT    Vectorization mode: 'outline' or 'color'  [default: outline]
+  --num-colors INTEGER     Number of colors for color mode (4-64)  [default: 24]
+  --simplify-tolerance FLOAT  Path simplification tolerance in pixels  [default: 1.5]
+  --min-area INTEGER       Minimum contour area in pixels  [default: 10]
 ```
 
 #### `assetforge 3d-scan`
@@ -361,12 +381,13 @@ assetforge/
 │   ├── config.py            # Configuration management
 │   ├── pipelines/           # Pipeline orchestrators
 │   │   ├── base.py          # BasePipeline with stage timing
-│   │   ├── pipeline_2d.py   # 2D sprite pipeline
+│   │   ├── pipeline_2d.py   # 2D sprite pipeline (with color vectorization)
 │   │   ├── pipeline_3d_photo.py  # Photogrammetry pipeline
 │   │   ├── pipeline_3d_gen.py    # Generative AI pipeline
 │   │   └── pipeline_3dgs.py     # Gaussian splatting pipeline
 │   ├── backends/            # External tool wrappers
-│   │   ├── segmentation.py  # SAM2 + Rembg
+│   │   ├── segmentation.py  # SAM2 + Rembg (model selection, alpha matting)
+│   │   ├── vectorize.py     # Color vectorization (Python/OpenCV)
 │   │   ├── blender.py       # Blender headless + scripts/
 │   │   ├── openmvg.py       # OpenMVG CLI wrapper
 │   │   ├── openmvs.py       # OpenMVS CLI wrapper
@@ -379,7 +400,7 @@ assetforge/
 │   └── utils/               # GPU detection, I/O, logging
 ├── rust/                    # Rust workspace
 │   ├── assetforge-core/     # Core algorithms
-│   │   ├── src/vectorize.rs     # Bitmap→SVG tracing
+│   │   ├── src/vectorize.rs     # Bitmap→SVG tracing (outline)
 │   │   ├── src/mesh_utils.rs    # Mesh simplification
 │   │   ├── src/splat_compress.rs # SPZ compression
 │   │   └── src/image_ops.rs     # Image processing
@@ -391,7 +412,8 @@ assetforge/
 │   ├── demo.py              # End-to-end demo
 │   ├── benchmark.py         # Performance benchmarks
 │   └── download_models.sh   # Model weight caching
-├── tests/                   # Test suite (26 tests)
+├── tests/                   # Test suite (62+ tests)
+│   ├── test_vectorize.py    # Vectorization tests (31 tests)
 │   ├── test_pipeline_2d.py
 │   ├── test_pipeline_3d_photo.py
 │   ├── test_pipeline_3d_gen.py
@@ -418,7 +440,7 @@ assetforge/
 
 | Tool | Install | VRAM | Pipeline |
 |------|---------|------|----------|
-| Rembg | `pip install rembg` | 1 GB | 2D sprites |
+| Rembg | `pip install rembg` | 1 GB | 2D sprites (models: u2net, isnet-general-use, isnet-anime, u2net_human_seg, silueta, sam) |
 | SAM 2 | `pip install git+https://github.com/facebookresearch/sam2.git` | 3 GB | 2D sprites |
 | TripoSR | Auto-cloned by backend | 3.5 GB | 3D generative |
 | Hunyuan3D-2 | `pip install hy3dgen` | 6 GB | 3D generative |
@@ -470,13 +492,14 @@ python3 scripts/benchmark.py
 ### Test Coverage
 
 ```
-26 Python tests + 9 Rust tests — all passing
+62 Python tests + 9 Rust tests — all passing
 ```
 
 | Test file | Tests | What it covers |
 |-----------|-------|----------------|
 | `test_base_pipeline.py` | 3 | Stage results, output dirs, timing |
-| `test_pipeline_2d.py` | 4 | Basic 2D, spritesheet, invalid input, edge cleanup |
+| `test_pipeline_2d.py` | 9 | Basic 2D, spritesheet, invalid input, edge cleanup, color vectorization, alpha matting, bg model |
+| `test_vectorize.py` | 31 | Color quantization, contour extraction, layer separation, SVG generation, edge cases |
 | `test_pipeline_3d_photo.py` | 5 | Init, retopology, missing tools, output dirs, invalid input |
 | `test_pipeline_3d_gen.py` | 5 | Init, options, missing model, unknown model, invalid input |
 | `test_pipeline_3dgs.py` | 5 | Init, options, missing COLMAP, video input, invalid input |
@@ -503,7 +526,10 @@ python3 scripts/benchmark.py
 | Model | Pipeline | VRAM | Quality | Package |
 |-------|----------|------|---------|---------|
 | SAM 2 | 2D background removal | 3 GB | ★★★★★ | `facebookresearch/sam2` |
-| Rembg | 2D background removal | 1 GB | ★★★☆☆ | `rembg` |
+| Rembg (U²-Net) | 2D background removal | 1 GB | ★★★☆☆ | `rembg` (model: `u2net`) |
+| Rembg (IS-Net) | 2D background removal | 1 GB | ★★★★☆ | `rembg` (model: `isnet-general-use`) |
+| Rembg (IS-Net Anime) | 2D background removal | 1 GB | ★★★★☆ | `rembg` (model: `isnet-anime`) |
+| Color Vectorization | 2D SVG export | CPU | ★★★★★ | Built-in (OpenCV + Python) |
 | TripoSR | 3D from single image | 3.5 GB | ★★★☆☆ | Auto-cloned from GitHub |
 | Hunyuan3D-2 | 3D from image + PBR | 6 GB | ★★★★☆ | `hy3dgen` |
 | TRELLIS | 3D from image + PBR + Splats | 8 GB | ★★★★★ | `trellis2` |

@@ -38,15 +38,24 @@ except ImportError:
 def run_2d_pipeline(
     input_image,
     bg_remover: str,
+    bg_model: str,
+    alpha_matting: bool,
+    alpha_fg: int,
+    alpha_bg: int,
+    alpha_erode: int,
     sprite_sizes: str,
     pack_sheet: bool,
     generate_svg: bool,
+    vectorize_mode: str,
+    num_colors: int,
+    simplify_tolerance: float,
+    min_area: int,
     feather: int,
     progress=gr.Progress(),
 ):
     """Run 2D sprite pipeline and return output paths."""
     if input_image is None:
-        return None, None, None, "⚠️ Please upload an image first."
+        return None, None, None, None, "⚠️ Please upload an image first."
 
     from assetforge.pipelines.pipeline_2d import Pipeline2D
 
@@ -54,13 +63,26 @@ def run_2d_pipeline(
     out_dir = tempfile.mkdtemp(prefix="assetforge_2d_")
 
     progress(0.1, desc="Initializing pipeline...")
+
+    # Only pass bg_model if using rembg
+    bg_model_val = bg_model if bg_remover == "rembg" and bg_model else None
+
     pipeline = Pipeline2D(
         input_path=input_image,
         output_dir=out_dir,
         background_remover=bg_remover,
+        bg_model=bg_model_val,
+        alpha_matting=alpha_matting,
+        alpha_matting_foreground_threshold=alpha_fg,
+        alpha_matting_background_threshold=alpha_bg,
+        alpha_matting_erode_size=alpha_erode,
         sprite_sizes=sizes,
         pack_sheet=pack_sheet,
         generate_vector=generate_svg,
+        vectorize_mode=vectorize_mode,
+        num_colors=num_colors,
+        simplify_tolerance=simplify_tolerance,
+        min_area=min_area,
         feather_pixels=feather,
     )
 
@@ -70,7 +92,7 @@ def run_2d_pipeline(
     all_ok = all(r.success for r in results)
     if not all_ok:
         errors = [f"{r.name}: {r.error}" for r in results if not r.success]
-        return None, None, None, f"❌ Pipeline failed:\n" + "\n".join(errors)
+        return None, None, None, None, f"❌ Pipeline failed:\n" + "\n".join(errors)
 
     progress(0.9, desc="Collecting outputs...")
 
@@ -98,8 +120,24 @@ def run_2d_pipeline(
             elif "foreground" in name or "cleaned" in name:
                 sprite_files.append(str(p))
 
+    # Read SVG content for inline preview
+    svg_html = None
+    if svg_file and Path(svg_file).exists():
+        try:
+            svg_content = Path(svg_file).read_text(encoding="utf-8")
+            # Embed SVG inline for preview (responsive via max-width)
+            svg_html = f'<div style="background:#f5f5f5; border-radius:8px; padding:8px; max-height:400px; overflow:auto;"><div style="max-width:100%;">{svg_content}</div></div>'
+        except Exception:
+            svg_html = None
+
     progress(1.0, desc="Done!")
-    return sprite_files, svg_file, sheet_file, "✅ Pipeline completed successfully!"
+    return (
+        sprite_files,
+        svg_file,
+        svg_html,
+        sheet_file,
+        "✅ Pipeline completed successfully!",
+    )
 
 
 def run_3d_gen_pipeline(
@@ -346,11 +384,56 @@ def create_ui():
                             height=300,
                         )
                         with gr.Group():
+                            gr.Markdown("**Background Removal**")
                             bg_remover = gr.Dropdown(
-                                label="Background Remover",
+                                label="Backend",
                                 choices=["rembg", "sam2"],
                                 value="rembg",
                             )
+                            bg_model = gr.Dropdown(
+                                label="Rembg Model",
+                                choices=[
+                                    "isnet-general-use",
+                                    "u2net",
+                                    "u2netp",
+                                    "u2net_human_seg",
+                                    "isnet-anime",
+                                    "silueta",
+                                ],
+                                value="isnet-general-use",
+                                visible=True,
+                                info="Only applies when Backend = rembg",
+                            )
+                            alpha_matting = gr.Checkbox(
+                                label="Alpha Matting",
+                                value=False,
+                                info="Smoother edges (Rembg only)",
+                            )
+                            with gr.Column(visible=False) as alpha_opts:
+                                alpha_fg = gr.Slider(
+                                    label="Alpha FG Threshold",
+                                    minimum=0,
+                                    maximum=255,
+                                    value=240,
+                                    step=1,
+                                )
+                                alpha_bg = gr.Slider(
+                                    label="Alpha BG Threshold",
+                                    minimum=0,
+                                    maximum=255,
+                                    value=10,
+                                    step=1,
+                                )
+                                alpha_erode = gr.Slider(
+                                    label="Alpha Erode Size",
+                                    minimum=0,
+                                    maximum=50,
+                                    value=10,
+                                    step=1,
+                                )
+
+                        with gr.Group():
+                            gr.Markdown("**Sprites**")
                             sprite_sizes = gr.Textbox(
                                 label="Sprite Sizes",
                                 value="64,128,256",
@@ -370,6 +453,42 @@ def create_ui():
                                 step=1,
                                 value=1,
                             )
+
+                        with gr.Group():
+                            gr.Markdown("**Vectorization**")
+                            vectorize_mode = gr.Dropdown(
+                                label="SVG Mode",
+                                choices=["outline", "color"],
+                                value="color",
+                                interactive=True,
+                                info="Outline = single-color silhouette, Color = multi-layer",
+                            )
+                            with gr.Column(visible=True) as vec_opts:
+                                num_colors = gr.Slider(
+                                    label="Color Count",
+                                    minimum=4,
+                                    maximum=64,
+                                    value=24,
+                                    step=1,
+                                    info="Number of colors for color mode",
+                                )
+                                simplify_tolerance = gr.Slider(
+                                    label="Simplify Tolerance",
+                                    minimum=0.5,
+                                    maximum=5.0,
+                                    value=1.5,
+                                    step=0.1,
+                                    info="Higher = smoother but less detail",
+                                )
+                                min_area = gr.Slider(
+                                    label="Min Area (px)",
+                                    minimum=1,
+                                    maximum=100,
+                                    value=10,
+                                    step=1,
+                                    info="Minimum contour size to include",
+                                )
+
                         run_btn_2d = gr.Button(
                             "🚀 Generate Sprites", variant="primary", size="lg"
                         )
@@ -386,21 +505,66 @@ def create_ui():
                             height=300,
                             object_fit="contain",
                         )
+                        with gr.Accordion("SVG Preview", open=True):
+                            svg_preview = gr.HTML(
+                                value='<p style="color:#888; text-align:center; padding:20px;">✨ Generate an SVG to see preview here.</p>',
+                                label="SVG Preview",
+                            )
                         with gr.Row():
-                            svg_download = gr.File(label="SVG Vector", visible=True)
-                            sheet_download = gr.File(label="Spritesheet", visible=True)
+                            svg_download = gr.File(label="Download SVG", visible=True)
+                            sheet_download = gr.File(
+                                label="Download Spritesheet", visible=True
+                            )
+
+                # ── Event wiring ──
+
+                # Show/hide alpha matting options
+                alpha_matting.change(
+                    fn=lambda x: gr.update(visible=x),
+                    inputs=[alpha_matting],
+                    outputs=[alpha_opts],
+                )
+
+                # Show/hide bg_model based on backend choice
+                bg_remover.change(
+                    fn=lambda x: gr.update(visible=(x == "rembg")),
+                    inputs=[bg_remover],
+                    outputs=[bg_model],
+                )
+
+                # Show/hide color-specific options based on vectorize mode
+                vectorize_mode.change(
+                    fn=lambda x: gr.update(visible=(x == "color")),
+                    inputs=[vectorize_mode],
+                    outputs=[vec_opts],
+                )
 
                 run_btn_2d.click(
                     fn=run_2d_pipeline,
                     inputs=[
                         input_2d,
                         bg_remover,
+                        bg_model,
+                        alpha_matting,
+                        alpha_fg,
+                        alpha_bg,
+                        alpha_erode,
                         sprite_sizes,
                         pack_sheet,
                         generate_svg,
+                        vectorize_mode,
+                        num_colors,
+                        simplify_tolerance,
+                        min_area,
                         feather,
                     ],
-                    outputs=[sprite_gallery, svg_download, sheet_download, status_2d],
+                    outputs=[
+                        sprite_gallery,
+                        svg_download,
+                        svg_preview,
+                        sheet_download,
+                        status_2d,
+                    ],
                 )
 
             # ──── TAB 2: 3D Generative ────
