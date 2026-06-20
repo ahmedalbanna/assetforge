@@ -220,13 +220,23 @@ if $INSTALL_ML; then
   install_ml_backend "Rembg (2D background removal)" "rembg>=0.7.0" "rembg"
 
   # SAM 2 (optional segmentation backend)
-  # Not on PyPI — check if already installed, otherwise print instructions
-  info "SAM 2 (optional 2D segmentation)..."
+  # Install from source (not on PyPI)
+  info "SAM 2 (2D segmentation from facebookresearch/sam2)..."
   if python3 -c "import sam2" 2>/dev/null; then
     ok "SAM 2 already installed"
   else
-    warn "SAM 2 not installed. If needed, install from source:"
-    info "  pip install 'git+https://github.com/facebookresearch/sam2.git'"
+    info "Cloning SAM 2 from facebookresearch/sam2..."
+    local sam2_dir="/tmp/opencode/sam2"
+    if [ ! -d "$sam2_dir" ]; then
+      git clone https://github.com/facebookresearch/sam2.git --depth=1 "$sam2_dir"
+    fi
+    SAM2_BUILD_CUDA=0 pip install -e "$sam2_dir" -q
+    if python3 -c "import sam2" 2>/dev/null; then
+      ok "SAM 2 installed"
+    else
+      warn "SAM 2 install failed. Try manually:"
+      info "  pip install 'git+https://github.com/facebookresearch/sam2.git'"
+    fi
   fi
 
   # TripoSR (3D from single image)

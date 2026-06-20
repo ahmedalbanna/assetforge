@@ -112,6 +112,22 @@ if [ "$INSTALL_HUNYUAN" = true ]; then
     $PYTHON -m pip install hy3dgen $VERBOSE
 fi
 
+# ── Step 5b: Install SAM 2 from source ──────────────────────────────────
+echo ""
+echo "━━━ Step 5b: Installing SAM 2 (facebookresearch/sam2) ────"
+if $PYTHON -c "import sam2" 2>/dev/null; then
+    echo "  ✓ SAM 2 already installed"
+else
+    SAM2_DIR="/tmp/opencode/sam2"
+    if [ ! -d "$SAM2_DIR" ]; then
+        echo "  Cloning SAM 2 from facebookresearch/sam2..."
+        git clone https://github.com/facebookresearch/sam2.git --depth=1 "$SAM2_DIR"
+    fi
+    echo "  Installing SAM 2 (CUDA extension optional)..."
+    SAM2_BUILD_CUDA=0 $PYTHON -m pip install -e "$SAM2_DIR" $VERBOSE
+    echo "  ✓ SAM 2 installed"
+fi
+
 # ── Step 6: Verify installation ────────────────────────────────────────────
 echo ""
 echo "━━━ Step 6: Verifying installation ──────────────"
@@ -135,6 +151,13 @@ if torch.cuda.is_available():
     print(f'✓ GPU available: {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB)')
 else:
     print('⚠ No GPU detected — running on CPU (slow)')
+
+# SAM 2
+try:
+    import sam2
+    print('✓ SAM 2 installed')
+except ImportError:
+    print('  SAM 2: not installed (auto-setup at runtime)')
 
 # Backends
 for name, pkg, imp in [

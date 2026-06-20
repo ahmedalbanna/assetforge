@@ -77,6 +77,9 @@ paths = ["rust/**/*"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (e.g., requires model checkpoint download)",
+]
 
 [tool.coverage.run]
 source = ["assetforge"]
