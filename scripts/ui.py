@@ -492,7 +492,7 @@ def create_ui():
                                     label="Simplify Tolerance",
                                     minimum=0.5,
                                     maximum=5.0,
-                                    value=1.5,
+                                    value=0.8,
                                     step=0.1,
                                     info="Higher = smoother but less detail",
                                 )
@@ -500,7 +500,7 @@ def create_ui():
                                     label="Min Area (px)",
                                     minimum=1,
                                     maximum=100,
-                                    value=10,
+                                    value=4,
                                     step=1,
                                     info="Minimum contour size to include",
                                 )

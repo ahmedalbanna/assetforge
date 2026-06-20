@@ -55,12 +55,13 @@ class ColorVectorizationConfig:
     """
 
     num_colors: int = 24
-    simplify_tolerance: float = 1.5
-    min_area: int = 10
+    simplify_tolerance: float = 0.8
+    min_area: int = 4
     color_tolerance: int = 10
     layer_order: str = "luminance"
     background_color: str = "none"
     max_svg_dimension: int = 0  # 0 = no downscale
+    gap_fill: bool = True  # fill remaining transparent holes between layers
 
     # Character-aware vectorization
     enable_character_features: bool = False
@@ -374,6 +375,66 @@ def _add_eye_highlight_paths(
     return elements
 
 
+def _assign_nearest_colors(
+    image: np.ndarray,
+    palette: np.ndarray,
+    fg_mask: np.ndarray,
+) -> np.ndarray:
+    """Assign every foreground pixel to its nearest palette color (Lab distance).
+
+    Uses CIE76 delta-E in Lab color space for perceptually uniform matching.
+    This guarantees 100% assignment — no pixel is left unmatched, which
+    eliminates the gaps caused by fixed RGB tolerance thresholds.
+
+    Args:
+        image: RGBA uint8 array, shape (H, W, 4).
+        palette: (N, 4) uint8 array of palette colors.
+        fg_mask: Boolean mask of foreground pixels (H, W).
+
+    Returns:
+        Integer label map of shape (H, W) where each foreground pixel
+        contains the index of its nearest palette color. Background pixels
+        are labeled -1.
+    """
+    h, w = image.shape[:2]
+    label_map = np.full((h, w), -1, dtype=np.int32)
+
+    if not fg_mask.any():
+        return label_map
+
+    # Convert image RGB to Lab
+    rgb = image[:, :, :3].astype(np.float32) / 255.0
+    lab_image = cv2.cvtColor(rgb, cv2.COLOR_RGB2Lab)  # (H, W, 3) float32
+
+    # Convert palette RGB to Lab
+    pal_rgb = palette[:, :3].astype(np.float32) / 255.0
+    pal_lab = cv2.cvtColor(pal_rgb.reshape(-1, 1, 3), cv2.COLOR_RGB2Lab).reshape(
+        -1, 3
+    )  # (N, 3) float32
+
+    # Number of valid palette entries (alpha > 5)
+    valid_indices = np.where(palette[:, 3] >= 5)[0]
+    if len(valid_indices) == 0:
+        return label_map
+
+    valid_pal_lab = pal_lab[valid_indices]  # (M, 3)
+
+    # For each foreground pixel, compute delta-E to all valid palette colors
+    # and assign to the nearest one.
+    # Flatten foreground pixels for vectorized distance computation.
+    fg_ys, fg_xs = np.where(fg_mask)
+    fg_pixels_lab = lab_image[fg_ys, fg_xs]  # (P, 3)
+
+    # Compute squared Lab distance: (P, 1, 3) - (1, M, 3) → (P, M, 3) → sum
+    diff = fg_pixels_lab[:, np.newaxis, :] - valid_pal_lab[np.newaxis, :, :]
+    dist_sq = np.sum(diff**2, axis=2)  # (P, M)
+
+    nearest = np.argmin(dist_sq, axis=1)  # (P,)
+    label_map[fg_ys, fg_xs] = valid_indices[nearest]
+
+    return label_map
+
+
 def separate_layers(
     image: np.ndarray,
     palette: np.ndarray,
@@ -399,6 +460,12 @@ def separate_layers(
     h, w = image.shape[:2]
     layers = []
 
+    # Build a nearest-color assignment map using Lab distance.
+    # This guarantees every foreground pixel is assigned to exactly one
+    # palette color, eliminating gaps caused by RGB tolerance matching.
+    fg_mask = image[:, :, 3] > 0
+    label_map = _assign_nearest_colors(image, palette, fg_mask)
+
     for idx in range(len(palette)):
         color = palette[idx]
         r, g, b, a = int(color[0]), int(color[1]), int(color[2]), int(color[3])
@@ -407,23 +474,17 @@ def separate_layers(
         if a < 5:
             continue
 
-        # Create binary mask for this color with tolerance
-        rgb_target = np.array([r, g, b], dtype=np.uint8)
-        rgb_image = image[:, :, :3]
+        # Create binary mask from the pre-computed nearest-color assignment
+        mask = (label_map == idx) & fg_mask
 
-        # Use RGB distance for mask creation
-        diff = np.abs(rgb_image.astype(np.int16) - rgb_target.astype(np.int16))
-        mask = np.all(diff <= config.color_tolerance, axis=2)
-
-        # Also require the pixel to be non-transparent in original
-        mask = mask & (image[:, :, 3] > 0)
-
-        # Remove tiny isolated blobs and fill small holes
+        # Fill small transparent holes inside the color region.
+        # NOTE: MORPH_OPEN is intentionally omitted — it erodes 1px from
+        # all edges and destroys thin features (belt straps, weapon edges,
+        # clothing folds, facial details), causing visible gaps in the SVG.
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(
             mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=1
         )
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
 
         # Find contours
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -557,6 +618,76 @@ def vectorize_color(
 
     # Step 2 & 3: Separate layers and extract contours
     layers = separate_layers(quantized, palette, config)
+
+    # Gap-fill safety net: check for any foreground pixels not covered
+    # by any layer's contours and add a fill layer for them.
+    if config.gap_fill and layers:
+        svg_h, svg_w = img.shape[:2]
+        layer_coverage = np.zeros((svg_h, svg_w), dtype=np.uint8)
+        for layer in layers:
+            cv2.drawContours(layer_coverage, layer["contours"], -1, 255, -1)
+        original_fg = img[:, :, 3] > 0
+        gap_pixels = original_fg & (layer_coverage == 0)
+        gap_count = int(gap_pixels.sum())
+        if gap_count > 0:
+            # Assign each gap pixel to its nearest palette color and
+            # generate a fill layer for the uncovered region.
+            gap_labels = _assign_nearest_colors(img, palette, original_fg)
+            gap_label_mask = gap_labels >= 0
+            gap_with_label = gap_label_mask & (layer_coverage == 0)
+
+            # Group gap pixels by their nearest palette color
+            for idx in range(len(palette)):
+                color = palette[idx]
+                r, g, b, a = int(color[0]), int(color[1]), int(color[2]), int(color[3])
+                if a < 5:
+                    continue
+                mask = (gap_labels == idx) & gap_with_label
+                if not mask.any():
+                    continue
+
+                # Dilate the gap mask slightly to connect isolated pixels
+                # into contiguous regions that form valid contours
+                kernel = np.ones((3, 3), np.uint8)
+                dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+
+                contours, _ = cv2.findContours(
+                    dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+                )
+
+                fill_contours = []
+                for contour in contours:
+                    area = cv2.contourArea(contour)
+                    if area < config.min_area:
+                        continue
+                    epsilon = config.simplify_tolerance
+                    approx = cv2.approxPolyDP(contour, epsilon, closed=True)
+                    if len(approx) >= 3:
+                        fill_contours.append(approx)
+
+                if fill_contours:
+                    # Check if this palette color already has a layer —
+                    # append the gap contours to it
+                    existing = next(
+                        (l for l in layers if l["color"][:3] == (r, g, b)), None
+                    )
+                    if existing:
+                        existing["contours"].extend(fill_contours)
+                        existing["area"] += sum(
+                            cv2.contourArea(c) for c in fill_contours
+                        )
+                    else:
+                        lum = _rgb_to_luminance(np.array([r, g, b]))
+                        layers.append(
+                            {
+                                "color": (r, g, b, a),
+                                "contours": fill_contours,
+                                "area": sum(cv2.contourArea(c) for c in fill_contours),
+                                "luminance": lum,
+                                "index": idx,
+                            }
+                        )
+            logger.info("Gap-fill: covered %d orphaned foreground pixels", gap_count)
 
     if not layers:
         logger.warning("No layers found in image — returning empty SVG")

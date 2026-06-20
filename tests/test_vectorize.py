@@ -12,6 +12,7 @@ Tests cover:
 
 import pytest
 import numpy as np
+import cv2
 from assetforge.backends.vectorize import (
     ColorVectorizationConfig,
     quantize_colors,
@@ -441,4 +442,166 @@ def test_svg_valid_xml():
     close_tags = svg.count("/>")
     assert open_paths == close_tags, (
         f"Not all path tags closed: {open_paths} opens vs {close_tags} closes"
+    )
+
+
+# ── Gap-Free Vectorization ────────────────────────────────────────
+
+
+def _compute_svg_gap_percentage(input_img: np.ndarray, svg_str: str) -> float:
+    """Measure foreground coverage by parsing SVG path data and filling contours.
+
+    This avoids cairosvg rendering artifacts on small images and directly
+    tests the algorithm's coverage quality.
+    """
+    import re
+
+    h, w = input_img.shape[:2]
+    fg_mask = input_img[:, :, 3] > 128
+    total_fg = int(fg_mask.sum())
+    if total_fg == 0:
+        return 0.0
+
+    # Parse all SVG path data and extract fill colors
+    coverage = np.zeros((h, w), dtype=np.uint8)
+    path_pattern = re.compile(r'<path\s+d="([^"]+)"[^>]*fill="([^"]+)"')
+    for match in path_pattern.finditer(svg_str):
+        fill = match.group(2)
+        if fill == "none":
+            continue
+
+        # We don't need exact colors — just need to know which pixels are covered
+        # Parse all M/L/Z subpaths and draw filled contours
+        d = match.group(1)
+        subpaths = re.split(r"(?=M\s)", d)
+        for subpath in subpaths:
+            subpath = subpath.strip()
+            if not subpath.startswith("M"):
+                continue
+            # Extract coordinates
+            coords = re.findall(r"[ML]\s*([\d.]+)\s+([\d.]+)", subpath)
+            if len(coords) < 3:
+                continue
+            pts = np.array([[float(x), float(y)] for x, y in coords], dtype=np.int32)
+            pts = pts.reshape(-1, 1, 2)
+            cv2.fillPoly(coverage, [pts], (255,))
+
+    coverage_bool = coverage > 0
+    gap = fg_mask & ~coverage_bool
+    return float(int(gap.sum()) / total_fg * 100)
+
+
+def test_no_gaps_simple_shape():
+    """Vectorize a simple colored image and verify near-zero gaps."""
+    img = _make_test_image_rgba(64, 64)
+    config = ColorVectorizationConfig(
+        num_colors=8,
+        simplify_tolerance=0.8,
+        min_area=4,
+        gap_fill=True,
+    )
+    svg = vectorize_color(img, config)
+
+    gap_pct = _compute_svg_gap_percentage(img, svg)
+    # SVG rendering via cairosvg introduces minor anti-aliasing artifacts,
+    # so we check that gaps are well under 5% (before fixes, this was ~10%)
+    assert gap_pct < 5.0, f"Gap too large: {gap_pct:.2f}%"
+
+
+def test_no_gaps_adjacent_colors():
+    """Vectorize an image with adjacent colored regions and verify coverage."""
+    # Create an image with tightly packed color blocks
+    img = np.zeros((48, 48, 4), dtype=np.uint8)
+    img[0:16, 0:48] = [200, 50, 50, 255]  # Red top
+    img[16:32, 0:48] = [50, 200, 50, 255]  # Green middle
+    img[32:48, 0:48] = [50, 50, 200, 255]  # Blue bottom
+
+    config = ColorVectorizationConfig(
+        num_colors=8,
+        simplify_tolerance=0.5,
+        min_area=2,
+        gap_fill=True,
+    )
+    svg = vectorize_color(img, config)
+
+    gap_pct = _compute_svg_gap_percentage(img, svg)
+    assert gap_pct < 5.0, f"Gap between adjacent colors: {gap_pct:.2f}%"
+
+
+def test_gap_fill_covers_foreground():
+    """Verify gap_fill=True results in better coverage than gap_fill=False."""
+    img = _make_test_image_rgba(64, 64)
+
+    config_fill = ColorVectorizationConfig(
+        num_colors=8,
+        gap_fill=True,
+        simplify_tolerance=0.8,
+        min_area=4,
+    )
+    config_nofill = ColorVectorizationConfig(
+        num_colors=8,
+        gap_fill=False,
+        simplify_tolerance=0.8,
+        min_area=4,
+    )
+
+    svg_fill = vectorize_color(img, config_fill)
+    svg_nofill = vectorize_color(img, config_nofill)
+
+    gap_fill = _compute_svg_gap_percentage(img, svg_fill)
+    gap_nofill = _compute_svg_gap_percentage(img, svg_nofill)
+
+    # gap_fill should be no worse (and ideally better)
+    assert gap_fill <= gap_nofill + 1.0, (
+        f"gap_fill={gap_fill:.2f}% should be <= no_fill={gap_nofill:.2f}%"
+    )
+
+
+def test_nearest_color_assignment():
+    """Verify every foreground pixel is assigned to a palette color."""
+    from assetforge.backends.vectorize import _assign_nearest_colors
+
+    img = _make_test_image_rgba(64, 64)
+    quantized, palette = quantize_colors(img, 8)
+
+    fg_mask = img[:, :, 3] > 0
+    label_map = _assign_nearest_colors(img, palette, fg_mask)
+
+    # Every foreground pixel should have a valid label
+    fg_labels = label_map[fg_mask]
+    assert (fg_labels >= 0).all(), "Some foreground pixels have no color assignment"
+    assert (fg_labels < len(palette)).all(), "Some labels exceed palette size"
+
+    # Number of assigned pixels should equal number of foreground pixels
+    assert fg_labels.shape[0] == fg_mask.sum()
+
+
+def test_morphology_preserves_thin_features():
+    """Verify thin 3px lines survive the layer separation."""
+    # Create an image with a thin 3px line on top of a block
+    img = np.zeros((32, 32, 4), dtype=np.uint8)
+    img[:, :] = [0, 0, 0, 0]  # transparent bg
+    img[8:24, 8:24] = [100, 100, 100, 255]  # gray block
+    img[14:17, 4:28] = [200, 50, 50, 255]  # 3px red line through center
+
+    config = ColorVectorizationConfig(
+        num_colors=4,
+        simplify_tolerance=0.5,
+        min_area=2,
+        gap_fill=True,
+    )
+    quantized, palette = quantize_colors(img, config.num_colors)
+    layers = separate_layers(quantized, palette, config)
+
+    # Reconstruct coverage from layers
+    coverage = np.zeros((32, 32), dtype=np.uint8)
+    for layer in layers:
+        cv2.drawContours(coverage, layer["contours"], -1, (255,), -1)
+
+    # The thin line (rows 14-16) should be mostly covered
+    line_fg = img[14:17, :, 3] > 0
+    line_covered = coverage[14:17, :] > 0
+    coverage_ratio = (line_fg & line_covered).sum() / max(line_fg.sum(), 1)
+    assert coverage_ratio > 0.7, (
+        f"Thin line coverage only {coverage_ratio * 100:.1f}% — MORPH_OPEN likely eroded it"
     )

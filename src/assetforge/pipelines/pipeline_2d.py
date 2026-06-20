@@ -55,8 +55,8 @@ class Pipeline2D(BasePipeline):
         generate_vector: bool = False,
         vectorize_mode: str = "outline",
         num_colors: int = 24,
-        simplify_tolerance: float = 1.5,
-        min_area: int = 10,
+        simplify_tolerance: float = 0.8,
+        min_area: int = 4,
         # Character feature options
         enable_character_features: bool = False,
         feature_simplify_tolerance: float = 0.5,

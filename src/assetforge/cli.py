@@ -116,14 +116,14 @@ def cmd_2d(
         max=64,
     ),
     simplify_tolerance: float = typer.Option(
-        1.5,
+        0.8,
         "--simplify-tolerance",
         help="Path simplification tolerance in pixels (0.5-5.0)",
         min=0.5,
         max=5.0,
     ),
     min_area: int = typer.Option(
-        10,
+        4,
         "--min-area",
         help="Minimum contour area in pixels for vectorization",
         min=1,
