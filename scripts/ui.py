@@ -37,12 +37,15 @@ except ImportError:
 
 def run_2d_pipeline(
     input_image,
+    quality: str,
+    # Background removal options
     bg_remover: str,
     bg_model: str,
     alpha_matting: bool,
     alpha_fg: int,
     alpha_bg: int,
     alpha_erode: int,
+    # Sprite options
     sprite_sizes: str,
     pack_sheet: bool,
     generate_svg: bool,
@@ -78,6 +81,7 @@ def run_2d_pipeline(
     pipeline = Pipeline2D(
         input_path=input_image,
         output_dir=out_dir,
+        quality=quality,
         background_remover=bg_remover,
         bg_model=bg_model_val,
         alpha_matting=alpha_matting,
@@ -399,6 +403,28 @@ def create_ui():
                             type="filepath",
                             height=300,
                         )
+
+                        # ── AI Quality Preset (controls everything) ──
+                        with gr.Group():
+                            gr.Markdown("**🎯 AI Quality Preset**")
+                            gr.Markdown(
+                                "Set quality and let AI choose the best settings. "
+                                "Override any setting below in Advanced.",
+                            )
+                            quality = gr.Radio(
+                                label="Quality",
+                                choices=[
+                                    ("Fast — quick preview, low detail", "fast"),
+                                    ("Balanced — general-purpose sprites", "balanced"),
+                                    ("High — detailed characters, fine art", "high"),
+                                    ("Ultra — maximum quality, SAM2", "ultra"),
+                                    ("Auto — analyze image, pick best", "auto"),
+                                ],
+                                value="balanced",
+                                info="Auto-configures all pipeline parameters",
+                            )
+
+                        # ── Background Removal (simplified) ──
                         with gr.Group():
                             gr.Markdown("**Background Removal**")
                             bg_remover = gr.Dropdown(
@@ -420,34 +446,8 @@ def create_ui():
                                 visible=True,
                                 info="Only applies when Backend = rembg",
                             )
-                            alpha_matting = gr.Checkbox(
-                                label="Alpha Matting",
-                                value=False,
-                                info="Smoother edges (Rembg only)",
-                            )
-                            with gr.Column(visible=False) as alpha_opts:
-                                alpha_fg = gr.Slider(
-                                    label="Alpha FG Threshold",
-                                    minimum=0,
-                                    maximum=255,
-                                    value=240,
-                                    step=1,
-                                )
-                                alpha_bg = gr.Slider(
-                                    label="Alpha BG Threshold",
-                                    minimum=0,
-                                    maximum=255,
-                                    value=10,
-                                    step=1,
-                                )
-                                alpha_erode = gr.Slider(
-                                    label="Alpha Erode Size",
-                                    minimum=0,
-                                    maximum=50,
-                                    value=10,
-                                    step=1,
-                                )
 
+                        # ── Sprite Options (simplified) ──
                         with gr.Group():
                             gr.Markdown("**Sprites**")
                             sprite_sizes = gr.Textbox(
@@ -462,57 +462,93 @@ def create_ui():
                                 generate_svg = gr.Checkbox(
                                     label="Generate SVG", value=True
                                 )
-                            feather = gr.Slider(
-                                label="Edge Feather (px)",
-                                minimum=0,
-                                maximum=5,
-                                step=1,
-                                value=1,
-                            )
 
-                        with gr.Group():
-                            gr.Markdown("**Vectorization**")
-                            vectorize_mode = gr.Dropdown(
-                                label="SVG Mode",
-                                choices=["outline", "color"],
-                                value="color",
-                                interactive=True,
-                                info="Outline = single-color silhouette, Color = multi-layer",
+                        # ── Advanced Settings (collapsible) ──
+                        with gr.Accordion("🔧 Advanced Settings", open=False):
+                            gr.Markdown(
+                                "Override individual settings. When set, these "
+                                "take precedence over the quality preset.",
                             )
-                            with gr.Column(visible=True) as vec_opts:
-                                num_colors = gr.Slider(
-                                    label="Color Count",
-                                    minimum=4,
-                                    maximum=64,
-                                    value=24,
-                                    step=1,
-                                    info="Number of colors for color mode",
+                            with gr.Group():
+                                gr.Markdown("**Alpha Matting**")
+                                alpha_matting = gr.Checkbox(
+                                    label="Enable Alpha Matting",
+                                    value=False,
+                                    info="Smoother edges (Rembg only)",
                                 )
-                                simplify_tolerance = gr.Slider(
-                                    label="Simplify Tolerance",
-                                    minimum=0.5,
-                                    maximum=5.0,
-                                    value=0.8,
-                                    step=0.1,
-                                    info="Higher = smoother but less detail",
-                                )
-                                min_area = gr.Slider(
-                                    label="Min Area (px)",
-                                    minimum=1,
-                                    maximum=100,
-                                    value=4,
-                                    step=1,
-                                    info="Minimum contour size to include",
-                                )
+                                with gr.Column(visible=False) as alpha_opts:
+                                    alpha_fg = gr.Slider(
+                                        label="Alpha FG Threshold",
+                                        minimum=0,
+                                        maximum=255,
+                                        value=240,
+                                        step=1,
+                                    )
+                                    alpha_bg = gr.Slider(
+                                        label="Alpha BG Threshold",
+                                        minimum=0,
+                                        maximum=255,
+                                        value=10,
+                                        step=1,
+                                    )
+                                    alpha_erode = gr.Slider(
+                                        label="Alpha Erode Size",
+                                        minimum=0,
+                                        maximum=50,
+                                        value=10,
+                                        step=1,
+                                    )
 
-                            # Character features (collapsible)
-                            with gr.Accordion(
-                                "Character Features (face-aware detail)", open=False
-                            ):
+                            with gr.Group():
+                                gr.Markdown("**Vectorization**")
+                                feather = gr.Slider(
+                                    label="Edge Feather (px)",
+                                    minimum=0,
+                                    maximum=5,
+                                    step=1,
+                                    value=1,
+                                )
+                                vectorize_mode = gr.Dropdown(
+                                    label="SVG Mode",
+                                    choices=["outline", "color"],
+                                    value="color",
+                                    interactive=True,
+                                    info="Outline = silhouette, Color = multi-layer",
+                                )
+                                with gr.Column(visible=True) as vec_opts:
+                                    num_colors = gr.Slider(
+                                        label="Color Count",
+                                        minimum=4,
+                                        maximum=64,
+                                        value=24,
+                                        step=1,
+                                        info="Number of colors for color mode",
+                                    )
+                                    simplify_tolerance = gr.Slider(
+                                        label="Simplify Tolerance",
+                                        minimum=0.5,
+                                        maximum=5.0,
+                                        value=0.8,
+                                        step=0.1,
+                                        info="Higher = smoother but less detail",
+                                    )
+                                    min_area = gr.Slider(
+                                        label="Min Area (px)",
+                                        minimum=1,
+                                        maximum=100,
+                                        value=4,
+                                        step=1,
+                                        info="Minimum contour size to include",
+                                    )
+
+                            with gr.Group():
+                                gr.Markdown(
+                                    "**Character Features (face-aware detail)**"
+                                )
                                 enable_character_features = gr.Checkbox(
                                     label="Enable Character Features",
                                     value=False,
-                                    info="Detect face, eyes, mouth and preserve detail in those regions",
+                                    info="Detect face, eyes, mouth and preserve detail",
                                 )
                                 with gr.Column(visible=False) as char_opts:
                                     feature_simplify_tolerance = gr.Slider(
@@ -521,7 +557,7 @@ def create_ui():
                                         maximum=3.0,
                                         value=0.5,
                                         step=0.1,
-                                        info="Lower = more detail in eyes/mouth (0.1-3.0)",
+                                        info="Lower = more detail in eyes/mouth",
                                     )
                                     feature_min_area = gr.Slider(
                                         label="Feature Min Area (px)",
@@ -554,7 +590,7 @@ def create_ui():
                                         label="Detail Level",
                                         choices=["low", "medium", "high"],
                                         value="high",
-                                        info="How much extra detail for facial features",
+                                        info="Extra detail for facial features",
                                     )
 
                                 # Show/hide character feature options based on checkbox
@@ -618,6 +654,7 @@ def create_ui():
                     fn=run_2d_pipeline,
                     inputs=[
                         input_2d,
+                        quality,
                         bg_remover,
                         bg_model,
                         alpha_matting,

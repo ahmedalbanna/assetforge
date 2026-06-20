@@ -50,6 +50,14 @@ def cli_callback(
 def cmd_2d(
     input: str = typer.Argument(..., help="Input image path (JPG/PNG)"),
     output: str = typer.Option("./output", "-o", "--output", help="Output directory"),
+    # AI Quality preset — overrides all other params when set
+    quality: str = typer.Option(
+        "",
+        "--quality",
+        "-q",
+        help="Quality preset: 'fast', 'balanced', 'high', 'ultra', 'auto'. "
+        "Overrides per-parameter flags. Empty = use individual flags.",
+    ),
     # Background removal options
     background_remover: str = typer.Option(
         "rembg",
@@ -185,6 +193,7 @@ def cmd_2d(
     pipeline = Pipeline2D(
         input_path=input,
         output_dir=output,
+        quality=quality if quality else "",
         background_remover=background_remover,
         bg_model=bg_model_val,
         alpha_matting=alpha_matting,

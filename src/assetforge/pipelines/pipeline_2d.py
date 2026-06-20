@@ -40,6 +40,8 @@ class Pipeline2D(BasePipeline):
         self,
         input_path: str,
         output_dir: str = "./output",
+        # Quality preset — overrides all other params when set
+        quality: str = "",
         # Background removal options
         background_remover: str = "rembg",
         bg_model: Optional[str] = None,
@@ -68,6 +70,58 @@ class Pipeline2D(BasePipeline):
     ):
         super().__init__(output_dir, name="2d-sprite")
         self.input_path = validate_input_image(input_path, check_exists=False)
+
+        # ── Apply quality preset if provided ──
+        if quality:
+            from assetforge.backends.smart_defaults import resolve_2d_config
+
+            cfg = resolve_2d_config(
+                quality=quality,
+                image_path=str(input_path) if Path(input_path).exists() else None,
+                user_overrides={
+                    # Only override params where user didn't pass explicit value
+                    # (None / empty / default detection deferred to resolve_2d_config)
+                },
+            )
+            # Apply resolved config over defaults
+            background_remover = cfg.get("background_remover", background_remover)
+            bg_model = cfg.get("bg_model", bg_model)
+            alpha_matting = cfg.get("alpha_matting", alpha_matting)
+            alpha_matting_foreground_threshold = cfg.get(
+                "alpha_matting_foreground_threshold",
+                alpha_matting_foreground_threshold,
+            )
+            alpha_matting_background_threshold = cfg.get(
+                "alpha_matting_background_threshold",
+                alpha_matting_background_threshold,
+            )
+            alpha_matting_erode_size = cfg.get(
+                "alpha_matting_erode_size", alpha_matting_erode_size
+            )
+            vectorize_mode = cfg.get("vectorize_mode", vectorize_mode)
+            num_colors = cfg.get("num_colors", num_colors)
+            simplify_tolerance = cfg.get("simplify_tolerance", simplify_tolerance)
+            min_area = cfg.get("min_area", min_area)
+            enable_character_features = cfg.get(
+                "enable_character_features", enable_character_features
+            )
+            feature_simplify_tolerance = cfg.get(
+                "feature_simplify_tolerance", feature_simplify_tolerance
+            )
+            feature_min_area = cfg.get("feature_min_area", feature_min_area)
+            preserve_line_art = cfg.get("preserve_line_art", preserve_line_art)
+            line_art_threshold = cfg.get("line_art_threshold", line_art_threshold)
+            enable_eye_highlights = cfg.get(
+                "enable_eye_highlights", enable_eye_highlights
+            )
+            semantic_detail_level = cfg.get(
+                "semantic_detail_level", semantic_detail_level
+            )
+            # Sprite sizes from preset
+            preset_sizes = cfg.get("sprite_sizes")
+            if preset_sizes and sprite_sizes is None:
+                sprite_sizes = preset_sizes
+
         self.background_remover = background_remover
         self.bg_model = bg_model
         self.alpha_matting = alpha_matting
@@ -93,7 +147,7 @@ class Pipeline2D(BasePipeline):
         self.vectorize_mode = vectorize_mode
         self.num_colors = int(clamp(num_colors, 4, 64, "num_colors"))
         self.simplify_tolerance = clamp(
-            simplify_tolerance, 0.5, 5.0, "simplify_tolerance"
+            simplify_tolerance, 0.3, 5.0, "simplify_tolerance"
         )
         self.min_area = int(clamp(min_area, 1, 10000, "min_area"))
         # Character feature parameters
