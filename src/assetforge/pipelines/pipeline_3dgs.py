@@ -7,14 +7,62 @@ Stages:
 3. Mesh extraction via SuGaR/MILo [optional]
 4. SPZ compression [optional]
 5. GLTF export with KHR_gaussian_splatting extension
+
+Quality Presets:
+    - fast:     Lowest splat count, no mesh, no compression, quickest
+    - balanced: Medium splats, MILo mesh, SPZ compress, good quality
+    - high:     High splats, SuGaR mesh, SPZ compress, detailed
+    - ultra:    Max splats, SuGaR mesh, SPZ compress, finest detail
 """
 
 import logging
 from pathlib import Path
 
-from assetforge.pipelines.base import BasePipeline
+from assetforge.pipelines.base import (
+    BasePipeline,
+    validate_input_path,
+)
 
 logger = logging.getLogger("assetforge")
+
+# ── Quality Presets ──────────────────────────────────────────────────────────
+# Each preset controls training quality, splat count, mesh extraction,
+# and compression for the 3DGS pipeline.
+
+QUALITY_PRESETS: dict[str, dict] = {
+    "fast": {
+        "train_quality": "low",
+        "max_splats": 100_000,
+        "extract_mesh": False,
+        "mesh_method": "milo",
+        "compress": False,
+    },
+    "balanced": {
+        "train_quality": "medium",
+        "max_splats": 500_000,
+        "extract_mesh": True,
+        "mesh_method": "milo",
+        "compress": True,
+    },
+    "high": {
+        "train_quality": "high",
+        "max_splats": 1_000_000,
+        "extract_mesh": True,
+        "mesh_method": "sugar",
+        "compress": True,
+    },
+    "ultra": {
+        "train_quality": "high",
+        "max_splats": 2_000_000,
+        "extract_mesh": True,
+        "mesh_method": "sugar",
+        "compress": True,
+    },
+}
+
+DEFAULT_PRESET = "balanced"
+
+VALID_PRESETS = set(QUALITY_PRESETS.keys())
 
 
 class Pipeline3DGS(BasePipeline):
@@ -24,19 +72,43 @@ class Pipeline3DGS(BasePipeline):
         self,
         input_path: str,
         output_dir: str = "./output",
+        # Quality preset (overrides individual params)
+        quality: str = "",
+        # Individual configuration (used when quality is empty)
+        train_quality: str = "medium",
         extract_mesh: bool = False,
         mesh_method: str = "milo",
         compress: bool = False,
-        quality: str = "medium",
         max_splats: int = 1_000_000,
     ):
         super().__init__(output_dir, name="3d-gaussian-splatting")
-        self.input_path = Path(input_path).resolve()
-        self.extract_mesh = extract_mesh
-        self.mesh_method = mesh_method
-        self.compress = compress
-        self.quality = quality
-        self.max_splats = max_splats
+        self.input_path = validate_input_path(input_path, check_exists=False)
+
+        # Resolve quality preset if specified
+        if quality and quality in QUALITY_PRESETS:
+            preset = QUALITY_PRESETS[quality]
+            self.quality_preset = quality
+            self.train_quality = preset.get("train_quality", train_quality)
+            self.max_splats = preset.get("max_splats", max_splats)
+            self.extract_mesh = preset.get("extract_mesh", extract_mesh)
+            self.mesh_method = preset.get("mesh_method", mesh_method)
+            self.compress = preset.get("compress", compress)
+            logger.info(
+                f"Using quality preset: '{quality}' "
+                f"(train: {self.train_quality}, splats: {self.max_splats})"
+            )
+        else:
+            if quality:
+                logger.warning(
+                    "Unknown quality preset '%s', falling back to individual params",
+                    quality,
+                )
+            self.quality_preset = quality
+            self.train_quality = train_quality
+            self.max_splats = max_splats
+            self.extract_mesh = extract_mesh
+            self.mesh_method = mesh_method
+            self.compress = compress
 
         self.stages_dir = self.output_dir / "stages"
         self.stages_dir.mkdir(parents=True, exist_ok=True)
@@ -117,7 +189,7 @@ class Pipeline3DGS(BasePipeline):
         train_splats(
             str(self._poses_dir),
             str(output_path),
-            quality=self.quality,
+            quality=self.train_quality,
             max_splats=self.max_splats,
         )
         self._splat_path = Path(output_path)

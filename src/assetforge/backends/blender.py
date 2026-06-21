@@ -134,3 +134,70 @@ class BlenderBackend:
         """Export mesh in the specified format (auto-detected from extension)."""
         self._run_script("blender_export.py", [str(input_mesh), str(output_path)])
         return Path(output_path)
+
+    def apply_decimate_rust(
+        self, input_mesh: str, output_mesh: str, ratio: float = 0.5
+    ) -> Optional[Path]:
+        """Reduce polygon count using Rust PyO3 backend (faster than Blender).
+
+        Falls back gracefully if the Rust module is not available.
+
+        Args:
+            input_mesh: Path to input mesh file (OBJ/PLY).
+            output_mesh: Path to output mesh file.
+            ratio: Target face ratio (0.0-1.0). 0.5 = halve the faces.
+
+        Returns:
+            Path to output mesh if Rust was used, None if fallback needed.
+        """
+        try:
+            from assetforge_pyo3 import optimize_mesh
+        except ImportError:
+            logger.debug("Rust PyO3 module not available for mesh optimization")
+            return None
+
+        try:
+            import trimesh
+
+            # Load mesh
+            mesh = trimesh.load(str(input_mesh))
+            if not isinstance(mesh, trimesh.Trimesh):
+                logger.warning(
+                    "Rust optimize_mesh requires a Trimesh, got %s. Falling back.",
+                    type(mesh).__name__,
+                )
+                return None
+
+            vertices = mesh.vertices.tolist()
+            indices = mesh.faces.flatten().tolist()
+
+            # Run Rust optimization
+            new_verts, new_indices = optimize_mesh(vertices, indices, float(ratio))
+
+            # Create optimized mesh
+            import numpy as np
+
+            opt_mesh = trimesh.Trimesh(
+                vertices=np.array(new_verts, dtype=np.float32),
+                faces=np.array(new_indices, dtype=np.int32).reshape(-1, 3),
+                vertex_normals=mesh.vertex_normals
+                if mesh.vertex_normals is not None
+                else None,
+            )
+
+            # Copy vertex colors if present
+            if mesh.visual and hasattr(mesh.visual, "vertex_colors"):
+                opt_mesh.visual = trimesh.visual.ColorVisuals(
+                    vertex_colors=mesh.visual.vertex_colors
+                )
+
+            opt_mesh.export(str(output_mesh))
+            logger.info(
+                f"Rust optimize_mesh: {len(vertices)}->{len(new_verts)} verts, "
+                f"{len(indices) // 3}->{len(new_indices) // 3} faces (ratio={ratio})"
+            )
+            return Path(output_mesh)
+
+        except Exception as e:
+            logger.warning(f"Rust optimize_mesh failed, falling back to Blender: {e}")
+            return None

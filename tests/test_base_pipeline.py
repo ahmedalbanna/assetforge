@@ -49,3 +49,24 @@ def test_base_pipeline_stage_timing(tmp_path: Path):
     assert pipeline.stages[1].success is False
     assert pipeline.stages[1].error == "test error"
     assert pipeline.stages[1].duration_s >= 0
+
+
+def test_validate_input_dir(tmp_path: Path):
+    """Test validate_input_dir function."""
+    from assetforge.pipelines.base import validate_input_dir
+
+    # Valid directory
+    d = tmp_path / "valid_dir"
+    d.mkdir()
+    result = validate_input_dir(str(d), check_exists=True)
+    assert result == d
+
+    # Non-existent directory with check_exists=False (should not raise)
+    result = validate_input_dir(str(tmp_path / "nonexistent"), check_exists=False)
+    assert str(result).endswith("nonexistent")
+
+    # Non-existent directory with check_exists=True (should raise)
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        validate_input_dir(str(tmp_path / "missing"), check_exists=True)

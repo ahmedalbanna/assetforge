@@ -228,6 +228,15 @@ def cmd_2d(
 def cmd_3d_scan(
     input: str = typer.Argument(..., help="Directory of multi-angle photos"),
     output: str = typer.Option("./output", "-o", "--output", help="Output directory"),
+    # Quality preset (overrides individual settings)
+    quality: str = typer.Option(
+        "",
+        "--quality",
+        "-q",
+        help="Quality preset: 'fast', 'balanced', 'high', 'ultra'. "
+        "Overrides per-parameter flags. If empty, uses per-param defaults.",
+    ),
+    # Individual configuration (used when quality is empty)
     feature_type: str = typer.Option(
         "sift", "--feature-type", help="Feature extractor: 'sift' or 'orb'"
     ),
@@ -244,12 +253,23 @@ def cmd_3d_scan(
         "glb", "--format", help="Output format: 'glb', 'obj', 'fbx'"
     ),
 ):
-    """Reconstruct a 3D model from multiple photos using photogrammetry."""
+    """Reconstruct a 3D model from multiple photos using photogrammetry.
+
+    Quality presets (--quality):
+    \b
+      fast      \tORB features, low mesh, no retopology (fastest)
+      balanced  \tSIFT features, medium mesh, retopology (default)
+      high      \tSIFT features, high mesh, retopology (30k faces)
+      ultra     \tSIFT features, high mesh, retopology (50k faces)
+
+    For fine control, use individual flags instead of --quality.
+    """
     from assetforge.pipelines.pipeline_3d_photo import Pipeline3DPhoto
 
     pipeline = Pipeline3DPhoto(
         input_dir=input,
         output_dir=output,
+        quality=quality,
         feature_type=feature_type,
         mesh_quality=mesh_quality,
         retopology=retopology,
@@ -391,6 +411,21 @@ def cmd_3d_gen(
 def cmd_3dgs(
     input: str = typer.Argument(..., help="Photo directory or video file"),
     output: str = typer.Option("./output", "-o", "--output", help="Output directory"),
+    # Quality preset (overrides individual settings)
+    quality: str = typer.Option(
+        "",
+        "--quality",
+        "-q",
+        help="Quality preset: 'fast', 'balanced', 'high', 'ultra'. "
+        "Overrides per-parameter flags. If empty, uses per-param defaults.",
+    ),
+    # Individual configuration (used when quality is empty)
+    train_quality: str = typer.Option(
+        "medium",
+        "--train-quality",
+        "-tq",
+        help="Training quality: 'low', 'medium', 'high'",
+    ),
     extract_mesh: bool = typer.Option(
         False, "--extract-mesh", help="Extract surface mesh from splats"
     ),
@@ -400,23 +435,31 @@ def cmd_3dgs(
     compress: bool = typer.Option(
         False, "--compress", help="Compress using SPZ format"
     ),
-    quality: str = typer.Option(
-        "medium", "--quality", help="Training quality: 'low', 'medium', 'high'"
-    ),
     max_splats: int = typer.Option(
         1_000_000, "--max-splats", help="Maximum number of Gaussians"
     ),
 ):
-    """Train 3D Gaussian Splatting from photos for real-time rendering."""
+    """Train 3D Gaussian Splatting from photos for real-time rendering.
+
+    Quality presets (--quality):
+    \b
+      fast      \t100K splats, no mesh, no compression (quickest)
+      balanced  \t500K splats, MILo mesh, SPZ compress (default)
+      high      \t1M splats, SuGaR mesh, SPZ compress (detailed)
+      ultra     \t2M splats, SuGaR mesh, SPZ compress (finest)
+
+    For fine control, use individual flags instead of --quality.
+    """
     from assetforge.pipelines.pipeline_3dgs import Pipeline3DGS
 
     pipeline = Pipeline3DGS(
         input_path=input,
         output_dir=output,
+        quality=quality,
+        train_quality=train_quality,
         extract_mesh=extract_mesh,
         mesh_method=mesh_method,
         compress=compress,
-        quality=quality,
         max_splats=max_splats,
     )
     pipeline.run()
@@ -463,11 +506,17 @@ def retopo(
     typer.echo(f"Output: {output_path}")
     typer.echo(f"Target faces: {target_faces}")
 
-    # Stage 1: Decimate
+    # Stage 1: Decimate (try Rust first, fall back to Blender)
     typer.echo("Stage 1/3: Decimating mesh...")
     decimated = Path(str(output_path) + ".decimated.obj")
     try:
-        blender.apply_decimate(str(input), str(decimated), ratio=decimate_ratio)
+        rust_result = blender.apply_decimate_rust(
+            str(input), str(decimated), ratio=decimate_ratio
+        )
+        if rust_result is None:
+            blender.apply_decimate(str(input), str(decimated), ratio=decimate_ratio)
+        used_rust = rust_result is not None
+        typer.echo(f"  ↳ {'Rust (fast)' if used_rust else 'Blender'} decimation")
     except Exception as e:
         typer.echo(f"Decimation failed: {e}", err=True)
         raise typer.Exit(1)

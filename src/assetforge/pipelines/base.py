@@ -151,6 +151,31 @@ def validate_input_mesh(path: str | Path, check_exists: bool = False) -> Path:
     return p
 
 
+def validate_input_dir(path: str | Path, check_exists: bool = False) -> Path:
+    """Validate and resolve an input directory path.
+
+    Args:
+        path: Input directory path to validate
+        check_exists: If True, also checks the directory exists
+
+    Returns:
+        Resolved Path object
+
+    Raises:
+        FileNotFoundError: If check_exists is True and the directory does not exist
+        ValueError: If the path is invalid or not a directory
+    """
+    p = _resolve_path(path)
+
+    if check_exists:
+        if not p.exists():
+            raise FileNotFoundError(f"Input directory not found: {p}")
+        if not p.is_dir():
+            raise ValueError(f"Input path is not a directory: {p}")
+
+    return p
+
+
 def validate_output_dir(path: str | Path) -> Path:
     """Validate and create an output directory.
 

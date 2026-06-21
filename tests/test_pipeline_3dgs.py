@@ -33,10 +33,10 @@ class TestPipeline3DGS:
         pipeline = Pipeline3DGS(
             input_path=str(photo_dir),
             output_dir="/tmp/test_3dgs_out",
-            quality="low",
+            train_quality="low",
         )
         assert pipeline.input_path == Path(photo_dir)
-        assert pipeline.quality == "low"
+        assert pipeline.train_quality == "low"
         assert pipeline.extract_mesh is False
         assert pipeline.compress is False
 
@@ -48,13 +48,13 @@ class TestPipeline3DGS:
             extract_mesh=True,
             mesh_method="milo",
             compress=True,
-            quality="high",
+            train_quality="high",
             max_splats=500_000,
         )
         assert pipeline.extract_mesh is True
         assert pipeline.mesh_method == "milo"
         assert pipeline.compress is True
-        assert pipeline.quality == "high"
+        assert pipeline.train_quality == "high"
         assert pipeline.max_splats == 500_000
 
     def test_pipeline_run_no_colmap(self, photo_dir):
@@ -62,7 +62,7 @@ class TestPipeline3DGS:
         pipeline = Pipeline3DGS(
             input_path=str(photo_dir),
             output_dir=str(photo_dir.parent / "3dgs_output"),
-            quality="low",
+            train_quality="low",
         )
         results = pipeline.run()
         # Pipeline should handle missing tools
@@ -99,3 +99,72 @@ class TestPipeline3DGS:
         results = pipeline.run()
         # Pipeline returns empty stages when input missing
         assert len(results) == 0
+
+    # ── Quality Preset Tests ──────────────────────────────────────────
+
+    def test_quality_preset_fast(self, photo_dir):
+        """Test 'fast' quality preset applies correct parameters."""
+        pipeline = Pipeline3DGS(
+            input_path=str(photo_dir),
+            output_dir="/tmp/test_gs_fast",
+            quality="fast",
+        )
+        assert pipeline.quality_preset == "fast"
+        assert pipeline.train_quality == "low"
+        assert pipeline.max_splats == 100_000
+        assert pipeline.extract_mesh is False
+        assert pipeline.compress is False
+
+    def test_quality_preset_balanced(self, photo_dir):
+        """Test 'balanced' quality preset applies correct parameters."""
+        pipeline = Pipeline3DGS(
+            input_path=str(photo_dir),
+            output_dir="/tmp/test_gs_balanced",
+            quality="balanced",
+        )
+        assert pipeline.quality_preset == "balanced"
+        assert pipeline.train_quality == "medium"
+        assert pipeline.max_splats == 500_000
+        assert pipeline.extract_mesh is True
+        assert pipeline.mesh_method == "milo"
+        assert pipeline.compress is True
+
+    def test_quality_preset_high(self, photo_dir):
+        """Test 'high' quality preset applies correct parameters."""
+        pipeline = Pipeline3DGS(
+            input_path=str(photo_dir),
+            output_dir="/tmp/test_gs_high",
+            quality="high",
+        )
+        assert pipeline.quality_preset == "high"
+        assert pipeline.train_quality == "high"
+        assert pipeline.max_splats == 1_000_000
+        assert pipeline.extract_mesh is True
+        assert pipeline.mesh_method == "sugar"
+
+    def test_quality_preset_ultra(self, photo_dir):
+        """Test 'ultra' quality preset applies correct parameters."""
+        pipeline = Pipeline3DGS(
+            input_path=str(photo_dir),
+            output_dir="/tmp/test_gs_ultra",
+            quality="ultra",
+        )
+        assert pipeline.quality_preset == "ultra"
+        assert pipeline.train_quality == "high"
+        assert pipeline.max_splats == 2_000_000
+        assert pipeline.extract_mesh is True
+        assert pipeline.compress is True
+
+    def test_quality_preset_fully_overrides_individual(self, photo_dir):
+        """Test that quality preset overrides all individual params."""
+        pipeline = Pipeline3DGS(
+            input_path=str(photo_dir),
+            output_dir="/tmp/test_gs_override",
+            quality="fast",
+            train_quality="high",  # individual param (overridden by preset)
+        )
+        # Quality preset fully overrides individual params when set
+        assert pipeline.quality_preset == "fast"
+        assert pipeline.train_quality == "low"  # from preset, individual ignored
+        assert pipeline.max_splats == 100_000  # from preset
+        assert pipeline.extract_mesh is False  # from preset

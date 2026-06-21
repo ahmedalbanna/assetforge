@@ -89,3 +89,74 @@ class TestPipeline3DGen:
         results = pipeline.run()
         # Pipeline returns empty stages when input missing
         assert len(results) == 0
+
+    # ── Quality Preset Tests ──────────────────────────────────────────
+
+    def test_quality_preset_fast(self, test_image):
+        """Test 'fast' quality preset applies correct parameters."""
+        pipeline = Pipeline3DGen(
+            input_path=str(test_image),
+            output_dir="/tmp/test_gen_fast",
+            quality="fast",
+        )
+        assert pipeline.quality_preset == "fast"
+        assert pipeline.model_name == "triposr"
+        assert pipeline.mesh_resolution == 128
+        assert pipeline.inference_steps == 25
+        assert pipeline.retopology is False
+        assert pipeline.generate_pbr is False
+
+    def test_quality_preset_balanced(self, test_image):
+        """Test 'balanced' quality preset applies correct parameters."""
+        pipeline = Pipeline3DGen(
+            input_path=str(test_image),
+            output_dir="/tmp/test_gen_balanced",
+            quality="balanced",
+        )
+        assert pipeline.quality_preset == "balanced"
+        assert pipeline.model_name == "auto"
+        assert pipeline.mesh_resolution == 256
+        assert pipeline.inference_steps == 50
+        assert pipeline.retopology is True
+
+    def test_quality_preset_high(self, test_image):
+        """Test 'high' quality preset applies correct parameters."""
+        pipeline = Pipeline3DGen(
+            input_path=str(test_image),
+            output_dir="/tmp/test_gen_high",
+            quality="high",
+        )
+        assert pipeline.quality_preset == "high"
+        assert pipeline.model_name == "hunyuan3d-2"
+        assert pipeline.mesh_resolution == 512
+        assert pipeline.inference_steps == 50
+        assert pipeline.retopology is True
+        assert pipeline.generate_pbr is True
+
+    def test_quality_preset_ultra(self, test_image):
+        """Test 'ultra' quality preset applies correct parameters."""
+        pipeline = Pipeline3DGen(
+            input_path=str(test_image),
+            output_dir="/tmp/test_gen_ultra",
+            quality="ultra",
+        )
+        assert pipeline.quality_preset == "ultra"
+        assert pipeline.model_name == "trellis"
+        assert pipeline.mesh_resolution == 512
+        assert pipeline.inference_steps == 75
+        assert pipeline.retopology is True
+        assert pipeline.generate_pbr is True
+
+    def test_quality_preset_fully_overrides_individual(self, test_image):
+        """Test that quality preset overrides all individual params."""
+        pipeline = Pipeline3DGen(
+            input_path=str(test_image),
+            output_dir="/tmp/test_gen_override",
+            quality="fast",
+            model_name="trellis",  # individual param (overridden by preset)
+        )
+        # Quality preset fully overrides individual params when set
+        assert pipeline.quality_preset == "fast"
+        assert pipeline.model_name == "triposr"  # from preset, individual ignored
+        assert pipeline.mesh_resolution == 128  # from preset
+        assert pipeline.inference_steps == 25  # from preset

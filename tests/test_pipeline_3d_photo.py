@@ -55,7 +55,7 @@ class TestPipeline3DPhoto:
         assert pipeline.output_format == "obj"
 
     def test_pipeline_run_no_openmvg(self, photo_set_dir):
-        """Test that pipeline raises clear error when OpenMVG is missing."""
+        """Test that pipeline handles missing tools gracefully."""
         pipeline = Pipeline3DPhoto(
             input_dir=str(photo_set_dir),
             output_dir=str(photo_set_dir.parent / "output"),
@@ -86,3 +86,85 @@ class TestPipeline3DPhoto:
         results = pipeline.run()
         # Pipeline returns empty stages when input missing
         assert len(results) == 0
+
+    # ── Quality Preset Tests ──────────────────────────────────────────
+
+    def test_quality_preset_fast(self, photo_set_dir):
+        """Test 'fast' quality preset applies correct parameters."""
+        pipeline = Pipeline3DPhoto(
+            input_dir=str(photo_set_dir),
+            output_dir="/tmp/test_photo_fast",
+            quality="fast",
+        )
+        assert pipeline.quality_preset == "fast"
+        assert pipeline.feature_type == "orb"
+        assert pipeline.mesh_quality == "low"
+        assert pipeline.retopology is False
+
+    def test_quality_preset_balanced(self, photo_set_dir):
+        """Test 'balanced' quality preset applies correct parameters."""
+        pipeline = Pipeline3DPhoto(
+            input_dir=str(photo_set_dir),
+            output_dir="/tmp/test_photo_balanced",
+            quality="balanced",
+        )
+        assert pipeline.quality_preset == "balanced"
+        assert pipeline.feature_type == "sift"
+        assert pipeline.mesh_quality == "medium"
+        assert pipeline.retopology is True
+        assert pipeline.target_faces == 15000
+        assert pipeline.output_format == "glb"
+
+    def test_quality_preset_high(self, photo_set_dir):
+        """Test 'high' quality preset applies correct parameters."""
+        pipeline = Pipeline3DPhoto(
+            input_dir=str(photo_set_dir),
+            output_dir="/tmp/test_photo_high",
+            quality="high",
+        )
+        assert pipeline.quality_preset == "high"
+        assert pipeline.feature_type == "sift"
+        assert pipeline.mesh_quality == "high"
+        assert pipeline.retopology is True
+        assert pipeline.target_faces == 30000
+
+    def test_quality_preset_ultra(self, photo_set_dir):
+        """Test 'ultra' quality preset applies correct parameters."""
+        pipeline = Pipeline3DPhoto(
+            input_dir=str(photo_set_dir),
+            output_dir="/tmp/test_photo_ultra",
+            quality="ultra",
+        )
+        assert pipeline.quality_preset == "ultra"
+        assert pipeline.feature_type == "sift"
+        assert pipeline.mesh_quality == "high"
+        assert pipeline.retopology is True
+        assert pipeline.target_faces == 50000
+
+    def test_quality_preset_fully_overrides_individual(self, photo_set_dir):
+        """Test that quality preset overrides all individual params."""
+        pipeline = Pipeline3DPhoto(
+            input_dir=str(photo_set_dir),
+            output_dir="/tmp/test_override",
+            quality="fast",
+            mesh_quality="high",  # individual param (overridden by preset)
+        )
+        # Quality preset fully overrides individual params when set
+        assert pipeline.quality_preset == "fast"
+        assert pipeline.feature_type == "orb"  # from preset
+        assert pipeline.mesh_quality == "low"  # from preset, individual ignored
+
+    def test_quality_preset_unknown(self, photo_set_dir):
+        """Test unknown quality preset logs warning and uses individual params."""
+        pipeline = Pipeline3DPhoto(
+            input_dir=str(photo_set_dir),
+            output_dir="/tmp/test_unknown",
+            quality="nonexistent",
+            feature_type="sift",
+            mesh_quality="high",
+        )
+        # Should fall back to individual params
+        assert pipeline.quality_preset == "nonexistent"
+        assert pipeline.feature_type == "sift"
+        assert pipeline.mesh_quality == "high"
+        assert pipeline.retopology is False

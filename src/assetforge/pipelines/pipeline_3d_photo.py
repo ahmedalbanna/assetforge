@@ -10,14 +10,63 @@ Stages:
 6. Texture mapping (OpenMVS)
 7. Retopology (Blender headless) [optional]
 8. Export to game format
+
+Quality Presets:
+    - fast:     ORB features, low mesh, no retopology, fast
+    - balanced: SIFT features, medium mesh, retopology (15k faces), glb
+    - high:     SIFT features, high mesh, retopology (30k faces), glb
+    - ultra:    SIFT features, high mesh, retopology (50k faces), 8k atlas, glb
 """
 
 import logging
 from pathlib import Path
 
-from assetforge.pipelines.base import BasePipeline
+from assetforge.pipelines.base import (
+    BasePipeline,
+    validate_input_dir,
+    validate_output_dir,
+)
 
 logger = logging.getLogger("assetforge")
+
+# ── Quality Presets ──────────────────────────────────────────────────────────
+# Each preset defines a complete set of photogrammetry pipeline parameters.
+# Individual CLI/UI flags override these when explicitly provided.
+
+QUALITY_PRESETS: dict[str, dict] = {
+    "fast": {
+        "feature_type": "orb",
+        "mesh_quality": "low",
+        "retopology": False,
+        "target_faces": 5000,
+        "output_format": "obj",
+    },
+    "balanced": {
+        "feature_type": "sift",
+        "mesh_quality": "medium",
+        "retopology": True,
+        "target_faces": 15000,
+        "output_format": "glb",
+    },
+    "high": {
+        "feature_type": "sift",
+        "mesh_quality": "high",
+        "retopology": True,
+        "target_faces": 30000,
+        "output_format": "glb",
+    },
+    "ultra": {
+        "feature_type": "sift",
+        "mesh_quality": "high",
+        "retopology": True,
+        "target_faces": 50000,
+        "output_format": "glb",
+    },
+}
+
+DEFAULT_PRESET = "balanced"
+
+VALID_PRESETS = set(QUALITY_PRESETS.keys())
 
 
 class Pipeline3DPhoto(BasePipeline):
@@ -27,6 +76,9 @@ class Pipeline3DPhoto(BasePipeline):
         self,
         input_dir: str,
         output_dir: str = "./output",
+        # Quality preset (overrides individual params)
+        quality: str = "",
+        # Individual configuration (used when quality is empty)
         feature_type: str = "sift",
         mesh_quality: str = "high",
         retopology: bool = False,
@@ -34,12 +86,33 @@ class Pipeline3DPhoto(BasePipeline):
         output_format: str = "glb",
     ):
         super().__init__(output_dir, name="3d-photogrammetry")
-        self.input_dir = Path(input_dir).resolve()
-        self.feature_type = feature_type
-        self.mesh_quality = mesh_quality
-        self.retopology = retopology
-        self.target_faces = target_faces
-        self.output_format = output_format
+        self.input_dir = validate_input_dir(input_dir, check_exists=False)
+
+        # Resolve quality preset if specified
+        if quality and quality in QUALITY_PRESETS:
+            preset = QUALITY_PRESETS[quality]
+            self.quality_preset = quality
+            self.feature_type = preset.get("feature_type", feature_type)
+            self.mesh_quality = preset.get("mesh_quality", mesh_quality)
+            self.retopology = preset.get("retopology", retopology)
+            self.target_faces = preset.get("target_faces", target_faces)
+            self.output_format = preset.get("output_format", output_format)
+            logger.info(
+                f"Using quality preset: '{quality}' "
+                f"(features: {self.feature_type}, mesh: {self.mesh_quality})"
+            )
+        else:
+            if quality:
+                logger.warning(
+                    "Unknown quality preset '%s', falling back to individual params",
+                    quality,
+                )
+            self.quality_preset = quality
+            self.feature_type = feature_type
+            self.mesh_quality = mesh_quality
+            self.retopology = retopology
+            self.target_faces = target_faces
+            self.output_format = output_format
 
         self.stages_dir = self.output_dir / "stages"
         self.stages_dir.mkdir(parents=True, exist_ok=True)
@@ -146,19 +219,22 @@ class Pipeline3DPhoto(BasePipeline):
         return [output_path]
 
     def _apply_retopology(self) -> list[Path]:
-        """Apply quad remeshing via Blender headless for game-ready topology."""
+        """Apply quad remeshing via Rust or Blender for game-ready topology."""
         self.require_attr("_textured_mesh_path", "texture_mapping")
         from assetforge.backends.blender import BlenderBackend
 
         blender = BlenderBackend()
         input_mesh = self._textured_mesh_path
         output_mesh = self.stages_dir / "mesh_retopology.obj"
+        ratio = min(1.0, self.target_faces / 100000.0)
 
-        blender.apply_decimate(
-            str(input_mesh),
-            str(output_mesh),
-            ratio=min(1.0, self.target_faces / 100000.0),
+        # Try Rust optimization first (faster), fall back to Blender
+        rust_result = blender.apply_decimate_rust(
+            str(input_mesh), str(output_mesh), ratio=ratio
         )
+        if rust_result is None:
+            blender.apply_decimate(str(input_mesh), str(output_mesh), ratio=ratio)
+
         self._retopologized_path = output_mesh
 
         # Apply quad remeshing

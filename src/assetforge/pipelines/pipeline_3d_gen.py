@@ -361,9 +361,15 @@ class Pipeline3DGen(BasePipeline):
 
         ratio = min(1.0, self.target_faces / 50000.0)
         decimated = self.stages_dir / "mesh_decimated.obj"
-        blender.apply_decimate(
+
+        # Try Rust optimization first (faster), fall back to Blender
+        rust_result = blender.apply_decimate_rust(
             str(self._cleaned_mesh_path), str(decimated), ratio=ratio
         )
+        if rust_result is None:
+            blender.apply_decimate(
+                str(self._cleaned_mesh_path), str(decimated), ratio=ratio
+            )
 
         quads = self.stages_dir / "mesh_quads.obj"
         blender.apply_remesh(str(decimated), str(quads), target_faces=self.target_faces)
