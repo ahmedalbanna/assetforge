@@ -345,7 +345,7 @@ def cmd_3d_gen(
         "auto",
         "--model",
         "-m",
-        help="AI model: 'auto', 'triposr', 'hunyuan3d-2', 'trellis'",
+        help="AI model: 'auto', 'triposr', 'dreamgaussian', 'hunyuan3d-2', 'trellis'",
     ),
     # Geometric fidelity
     mesh_resolution: int = typer.Option(
@@ -416,7 +416,7 @@ def cmd_3d_gen(
     Quality presets (--quality):
     \b
       fast      \tTripoSR, low res, no PBR (fastest)
-      balanced  \tAuto model, medium res, PBR (default)
+      balanced  \tAuto model, medium res, PBR, DreamGaussian textured (default)
       high      \tHunyuan3D-2, high res, PBR + retopology
       ultra     \tTRELLIS, max res, PBR + retopology
 
@@ -439,6 +439,92 @@ def cmd_3d_gen(
         bake_from_original=bake_original,
         retopology=retopology,
         target_faces=target_faces,
+        output_format=format,
+    )
+    pipeline.run()
+
+
+# ──────────────────────────────────────────────
+# Texture Baking Pipeline
+# ──────────────────────────────────────────────
+
+
+@app.command(name="bake")
+def cmd_bake(
+    mesh: str = typer.Argument(
+        ..., help="Input mesh file (OBJ/GLB/GLTF/FBX/PLY/STL) to bake texture onto"
+    ),
+    output: str = typer.Option("./output", "-o", "--output", help="Output directory"),
+    # Texture source — one of these must be provided
+    nerf_features: str = typer.Option(
+        "",
+        "--nerf-features",
+        "-nf",
+        help="Path to cached NeRF features (.pkl) from TripoSR/DreamGaussian",
+    ),
+    texture_image: str = typer.Option(
+        "",
+        "--texture-image",
+        "-ti",
+        help="Original input image to project onto mesh",
+    ),
+    # Quality
+    quality: str = typer.Option(
+        "balanced",
+        "--quality",
+        "-q",
+        help="Quality preset: 'fast', 'balanced', 'high', 'ultra'",
+    ),
+    resolution: int = typer.Option(
+        2048,
+        "--resolution",
+        "-r",
+        help="Texture resolution in pixels (1024/2048/4096/8192)",
+    ),
+    no_blender: bool = typer.Option(
+        False,
+        "--no-blender",
+        help="Disable Blender for baking (use trimesh fallback)",
+    ),
+    format: str = typer.Option(
+        "glb",
+        "--format",
+        "-f",
+        help="Output format: 'glb', 'obj', 'fbx'",
+    ),
+    name: str = typer.Option(
+        "textured",
+        "--name",
+        "-n",
+        help="Output filename (without extension)",
+    ),
+):
+    """Bake textures onto a mesh from NeRF features or image projection.
+
+    Supports two workflows:
+
+    1. NeRF Baking (from TripoSR/DreamGaussian features):
+       First generate with: assetforge 3d-gen input.png -o output/
+       This creates a .pkl NeRF features file in the output/stages/ directory.
+       After editing the mesh in Blender, bake textures:
+       assetforge bake edited.obj --nerf-features output/stages/nerf_features.pkl -o final/
+
+    2. Image Projection (simple vertex color → UV texture):
+       assetforge bake mesh.obj --texture-image original.png -o final/
+
+    Quality presets control resolution, antialiasing, and UV padding.
+    """
+    from assetforge.pipelines.pipeline_bake import PipelineBake
+
+    pipeline = PipelineBake(
+        mesh_path=mesh,
+        output_dir=output,
+        nerf_features_path=nerf_features if nerf_features else None,
+        texture_image_path=texture_image if texture_image else None,
+        quality=quality,
+        resolution=resolution,
+        use_blender=not no_blender,
+        output_name=name,
         output_format=format,
     )
     pipeline.run()

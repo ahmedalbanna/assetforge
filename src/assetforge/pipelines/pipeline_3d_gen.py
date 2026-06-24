@@ -50,6 +50,9 @@ QUALITY_PRESETS = {
         "generate_pbr": True,
         "target_faces": 15000,
         "bake_from_original": True,
+        # Balanced also tries DreamGaussian for textured output
+        "dreamgaussian_steps": 500,
+        "dreamgaussian_texture_steps": 50,
     },
     "high": {
         "model": "hunyuan3d-2",
@@ -325,6 +328,10 @@ class Pipeline3DGen(BasePipeline):
         all_models = {
             "trellis": ("assetforge.backends.trellis", "TRELLISBackend"),
             "hunyuan3d-2": ("assetforge.backends.hunyuan3d", "Hunyuan3DBackend"),
+            "dreamgaussian": (
+                "assetforge.backends.dreamgaussian",
+                "DreamGaussianBackend",
+            ),
             "triposr": ("assetforge.backends.triposr", "TripoSRBackend"),
         }
 
@@ -332,10 +339,11 @@ class Pipeline3DGen(BasePipeline):
             return [
                 ("trellis", all_models["trellis"]),
                 ("hunyuan3d-2", all_models["hunyuan3d-2"]),
+                ("dreamgaussian", all_models["dreamgaussian"]),
                 ("triposr", all_models["triposr"]),
             ]
         elif self.model_name in all_models:
-            ordered_keys = ["trellis", "hunyuan3d-2", "triposr"]
+            ordered_keys = ["trellis", "hunyuan3d-2", "dreamgaussian", "triposr"]
             start_idx = ordered_keys.index(self.model_name)
             return [(k, all_models[k]) for k in ordered_keys[start_idx:]]
         else:

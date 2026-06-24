@@ -164,11 +164,14 @@ def run_3d_gen_pipeline(
     input_image,
     model_name: str,
     pbr: bool,
+    mesh_resolution: int,
+    texture_resolution: int,
+    use_retopology: bool,
     progress=gr.Progress(),
 ):
     """Run 3D generative pipeline."""
     if input_image is None:
-        return None, "⚠️ Please upload an image first."
+        return None, None, "⚠️ Please upload an image first."
 
     from assetforge.pipelines.pipeline_3d_gen import Pipeline3DGen
 
@@ -180,32 +183,40 @@ def run_3d_gen_pipeline(
         output_dir=out_dir,
         model_name=model_name,
         generate_pbr=pbr,
+        mesh_resolution=mesh_resolution,
+        texture_resolution=texture_resolution,
+        retopology=use_retopology,
     )
 
     progress(0.3, desc="Generating 3D model (this may take a while)...")
     try:
         results = pipeline.run()
     except Exception as e:
-        return None, f"❌ Generation failed: {e}"
+        return None, None, f"❌ Generation failed: {e}"
 
     all_ok = all(r.success for r in results)
     if not all_ok:
         errors = [f"{r.name}: {r.error}" for r in results if not r.success]
-        return None, "❌ " + "\n".join(errors)
+        return None, None, "❌ " + "\n".join(errors)
 
     progress(0.9, desc="Collecting outputs...")
 
     # Find the final output model
     model_file = None
+    nerf_features_file = None
     for r in results:
         for p in r.output_paths:
             p = Path(p)
             if p.exists() and p.suffix in (".glb", ".obj", ".gltf"):
                 model_file = str(p)
-                break
+
+    # Look for NeRF features in stages directory
+    nerf_candidates = list(Path(out_dir).rglob("nerf_features.pkl"))
+    if nerf_candidates:
+        nerf_features_file = str(nerf_candidates[0])
 
     progress(1.0, desc="Done!")
-    return model_file, "✅ Model generated successfully!"
+    return model_file, nerf_features_file, "✅ Model generated successfully!"
 
 
 def run_3d_scan_pipeline(
@@ -347,6 +358,75 @@ def run_retopo_pipeline(
     return str(output_path), f"✅ Mesh optimized ({size_kb:.1f} KB)"
 
 
+def run_bake_pipeline(
+    input_mesh,
+    source_type: str,
+    nerf_features_file,
+    texture_image,
+    quality: str,
+    resolution: int,
+    output_format: str,
+    progress=gr.Progress(),
+):
+    """Run texture baking pipeline."""
+    if input_mesh is None:
+        return None, "⚠️ Please upload a mesh file first."
+
+    from assetforge.pipelines.pipeline_bake import PipelineBake
+
+    out_dir = tempfile.mkdtemp(prefix="assetforge_bake_")
+
+    nerf_path = None
+    tex_path = None
+    if source_type == "NeRF Features (.pkl)":
+        if nerf_features_file is None:
+            return None, "⚠️ Please upload a NeRF features (.pkl) file."
+        nerf_path = nerf_features_file
+    else:
+        if texture_image is None:
+            return None, "⚠️ Please upload a texture image."
+        tex_path = texture_image
+
+    progress(0.1, desc="Initializing texture baking...")
+    pipeline = PipelineBake(
+        mesh_path=input_mesh,
+        output_dir=out_dir,
+        nerf_features_path=nerf_path,
+        texture_image_path=tex_path,
+        quality=quality,
+        resolution=resolution,
+        output_format=output_format,
+    )
+
+    progress(0.3, desc="Baking textures (this may take a moment)...")
+    try:
+        results = pipeline.run()
+    except Exception as e:
+        return None, f"❌ Baking failed: {e}"
+
+    all_ok = all(r.success for r in results)
+    if not all_ok:
+        errors = [f"{r.name}: {r.error}" for r in results if not r.success]
+        return None, "❌ " + "\n".join(errors)
+
+    progress(0.9, desc="Collecting outputs...")
+
+    # Find the final textured output
+    output_file = None
+    for r in results:
+        for p in r.output_paths:
+            p = Path(p)
+            if p.exists() and p.suffix in (".glb", ".obj", ".fbx"):
+                output_file = str(p)
+                break
+
+    progress(1.0, desc="Done!")
+    if output_file:
+        size_kb = Path(output_file).stat().st_size / 1024
+        return output_file, f"✅ Textures baked successfully ({size_kb:.1f} KB)"
+    return output_file, "✅ Baking complete (check output directory)"
+
+
 def get_system_info():
     """Gather system information for the Info tab."""
     info = {}
@@ -400,6 +480,21 @@ def get_system_info():
     for name, cmd in backends.items():
         info["Backends"][name] = shutil.which(cmd) is not None
 
+    # AI model backends (Python packages)
+    info["AI Backends"] = {}
+    ai_backends = {
+        "TripoSR": "tsr",
+        "DreamGaussian": "dreamgaussian",
+        "Hunyuan3D-2": "hy3dgen",
+        "TRELLIS": "trellis",
+    }
+    for name, pkg in ai_backends.items():
+        try:
+            __import__(pkg)
+            info["AI Backends"][name] = True
+        except ImportError:
+            info["AI Backends"][name] = False
+
     # Model registry
     try:
         from assetforge.models.registry import list_available_models
@@ -450,6 +545,21 @@ def format_system_info(info: dict) -> str:
             lines.append(f"- {status} {name}")
     elif isinstance(models, dict) and "error" in models:
         lines.append(f"\n### Models: {models['error']}")
+
+    # AI Backends
+    ai_backends = info.get("AI Backends", {})
+    if ai_backends:
+        lines.append("\n### AI Model Backends")
+        for name, installed in ai_backends.items():
+            icon = "✅" if installed else "⬜"
+            lines.append(f"- {icon} {name}")
+
+    # Texture Baking
+    lines.append("\n### Texture Baking")
+    lines.append("- ✅ PipelineBake (standalone texture baking)")
+    lines.append("- ✅ NeRF feature extraction (TripoSR)")
+    lines.append("- ✅ UV unwrapping via xatlas/trimesh")
+    lines.append("- ✅ Image projection fallback")
 
     return "\n".join(lines)
 
@@ -778,14 +888,63 @@ def create_ui():
                         with gr.Group():
                             model_choice = gr.Dropdown(
                                 label="AI Model",
-                                choices=["auto", "triposr", "hunyuan3d-2", "trellis"],
+                                choices=[
+                                    ("Auto (recommended)", "auto"),
+                                    ("TripoSR — fastest, <0.5s", "triposr"),
+                                    (
+                                        "DreamGaussian — textured, iterative",
+                                        "dreamgaussian",
+                                    ),
+                                    ("Hunyuan3D-2 — high quality PBR", "hunyuan3d-2"),
+                                    ("TRELLIS — ultra quality", "trellis"),
+                                ],
                                 value="auto",
                                 info="Auto selects best model for your GPU",
                             )
-                            pbr_toggle = gr.Checkbox(
-                                label="Generate PBR Textures",
-                                value=False,
-                            )
+                            with gr.Row():
+                                pbr_toggle = gr.Checkbox(
+                                    label="PBR Textures",
+                                    value=False,
+                                    info="Generate albedo/normal/roughness maps",
+                                )
+                                retopology_toggle = gr.Checkbox(
+                                    label="Retopology",
+                                    value=False,
+                                    info="Optimize mesh for game engines",
+                                )
+
+                        # Advanced settings
+                        with gr.Accordion("🔧 Advanced Settings", open=False):
+                            gr.Markdown("**Geometric & Texture Quality**")
+                            with gr.Row():
+                                mesh_res_3d = gr.Slider(
+                                    label="Mesh Resolution",
+                                    minimum=128,
+                                    maximum=512,
+                                    step=128,
+                                    value=256,
+                                    info="Higher = more geometric detail",
+                                )
+                                tex_res_3d = gr.Slider(
+                                    label="Texture Resolution",
+                                    minimum=512,
+                                    maximum=4096,
+                                    step=512,
+                                    value=2048,
+                                    info="Output texture size (px)",
+                                )
+
+                        # NeRF features output for later texture baking
+                        nerf_features_output = gr.File(
+                            label="NeRF Features (for texture baking)",
+                            visible=True,
+                            interactive=False,
+                        )
+                        gr.Markdown(
+                            "*NeRF features saved automatically. Use 'Texture Bake' tab "
+                            "to re-bake after editing the mesh in Blender.*",
+                        )
+
                         run_btn_3d = gr.Button(
                             "🚀 Generate 3D Model", variant="primary", size="lg"
                         )
@@ -810,8 +969,15 @@ def create_ui():
 
                 run_btn_3d.click(
                     fn=run_3d_gen_pipeline,
-                    inputs=[input_3d, model_choice, pbr_toggle],
-                    outputs=[model_viewer, status_3d],
+                    inputs=[
+                        input_3d,
+                        model_choice,
+                        pbr_toggle,
+                        mesh_res_3d,
+                        tex_res_3d,
+                        retopology_toggle,
+                    ],
+                    outputs=[model_viewer, nerf_features_output, status_3d],
                 ).then(
                     fn=lambda m: m,
                     inputs=[model_viewer],
@@ -994,7 +1160,120 @@ def create_ui():
                     outputs=[scan_model_download],
                 )
 
-            # ──── TAB 4: Retopology ────
+            # ──── TAB 4: Texture Baking ────
+            with gr.Tab("🎨 Texture Bake"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### Input")
+                        bake_mesh_input = gr.File(
+                            label="Upload Mesh (OBJ/GLB/GLTF/FBX/PLY)",
+                            file_types=[
+                                ".obj",
+                                ".glb",
+                                ".gltf",
+                                ".fbx",
+                                ".ply",
+                                ".stl",
+                            ],
+                        )
+
+                        with gr.Group():
+                            bake_source_type = gr.Radio(
+                                label="Texture Source",
+                                choices=[
+                                    "NeRF Features (.pkl)",
+                                    "Image Projection",
+                                ],
+                                value="Image Projection",
+                                info="NeRF features from 3D Gen pipeline; Image for simple projection",
+                            )
+
+                        # NeRF features input (shown when NeRF selected)
+                        bake_nerf_input = gr.File(
+                            label="NeRF Features (.pkl)",
+                            visible=False,
+                            file_types=[".pkl"],
+                        )
+
+                        # Texture image input (shown when Image selected)
+                        bake_image_input = gr.Image(
+                            label="Texture Image",
+                            type="filepath",
+                            visible=True,
+                            height=200,
+                        )
+
+                        # Quality & output settings
+                        with gr.Group():
+                            gr.Markdown("**Baking Settings**")
+                            bake_quality = gr.Radio(
+                                label="Quality",
+                                choices=[
+                                    ("Fast — 1024px", "fast"),
+                                    ("Balanced — 2048px", "balanced"),
+                                    ("High — 4096px", "high"),
+                                    ("Ultra — 8192px", "ultra"),
+                                ],
+                                value="balanced",
+                            )
+                            with gr.Row():
+                                bake_resolution = gr.Slider(
+                                    label="Resolution",
+                                    minimum=256,
+                                    maximum=8192,
+                                    step=256,
+                                    value=2048,
+                                    visible=False,  # Hidden when using preset
+                                )
+                                bake_format = gr.Radio(
+                                    label="Output Format",
+                                    choices=["glb", "obj", "fbx"],
+                                    value="glb",
+                                )
+
+                        run_btn_bake = gr.Button(
+                            "🎨 Bake Textures", variant="primary", size="lg"
+                        )
+
+                    with gr.Column(scale=2):
+                        gr.Markdown("### Results")
+                        status_bake = gr.Markdown("Ready.")
+                        bake_output_viewer = gr.Model3D(
+                            label="Textured Model",
+                            clear_color=(0.2, 0.2, 0.2, 1.0),
+                            height=500,
+                        )
+                        bake_output_file = gr.File(label="Download Textured Model")
+
+                # Show/hide inputs based on source type
+                bake_source_type.change(
+                    fn=lambda x: (
+                        gr.update(visible=(x == "NeRF Features (.pkl)")),
+                        gr.update(visible=(x == "Image Projection")),
+                    ),
+                    inputs=[bake_source_type],
+                    outputs=[bake_nerf_input, bake_image_input],
+                )
+
+                run_btn_bake.click(
+                    fn=run_bake_pipeline,
+                    inputs=[
+                        bake_mesh_input,
+                        bake_source_type,
+                        bake_nerf_input,
+                        bake_image_input,
+                        bake_quality,
+                        bake_resolution,
+                        bake_format,
+                    ],
+                    outputs=[bake_output_viewer, status_bake],
+                ).then(
+                    fn=lambda m: m,
+                    inputs=[bake_output_viewer],
+                    outputs=[bake_output_file],
+                )
+
+            # ──── TAB 5: Retopology ────
             with gr.Tab("🔧 Retopology"):
                 with gr.Row():
                     with gr.Column(scale=1):

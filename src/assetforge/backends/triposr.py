@@ -252,6 +252,7 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
         foreground_ratio: float = 0.85,
         chunk_size: int = 131072,
         bake_from_original: bool = True,
+        save_nerf_features: bool = True,
     ) -> Path:
         """Generate a 3D mesh from a single image using TripoSR.
 
@@ -266,6 +267,8 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
                 (0.5-1.0). Higher = more pixels on the object.
             chunk_size: Renderer chunk size for TripoSR. Lower = less VRAM.
             bake_from_original: Project original image onto mesh as texture.
+            save_nerf_features: If True, saves NeRF features to a .pkl file
+                for later texture baking after mesh editing.
 
         Returns:
             Path to the output mesh
@@ -375,6 +378,22 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             meshes[0].export(str(output))
             logger.info(f"TripoSR mesh saved to: {output}")
 
+            # Save NeRF features for later texture baking
+            if save_nerf_features:
+                try:
+                    nerf_path = output.parent / "nerf_features.pkl"
+                    self._save_nerf_features(
+                        model=model,
+                        scene_codes=scene_codes,
+                        mesh=meshes[0],
+                        original_image=original_image,
+                        output_path=str(nerf_path),
+                        method="triplane",
+                    )
+                    logger.info(f"NeRF features saved to: {nerf_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to save NeRF features: {e}")
+
             # Optional: project original image onto mesh as texture
             if bake_from_original and not pbr:
                 try:
@@ -430,6 +449,105 @@ def marching_cubes(sdf_tensor, isovalue=0.0):
             raise RuntimeError(f"TripoSR inference failed: {e}")
 
         return Path(output_path)
+
+    def _save_nerf_features(
+        self,
+        model: object,
+        scene_codes: object,
+        mesh: object,
+        original_image: object,
+        output_path: str,
+        method: str = "triplane",
+    ) -> Path:
+        """Cache NeRF radiance field features for later texture baking.
+
+        Saves a .pkl file containing:
+        - scene_code: The Triplane scene code tensor (requires grad)
+        - vertex_colors: Colors extracted from NeRF at vertex positions
+        - vertices: Mesh vertex positions
+        - faces: Mesh face indices
+        - method: Rendering method identifier
+        - camera_radius, fov: Camera parameters for multi-view rendering
+        - original_image: The input image for fallback projection
+
+        This enables the TripoSR-Bake workflow where users can:
+        1. Generate a mesh + NeRF features
+        2. Edit the mesh topology in Blender
+        3. Bake textures from the cached NeRF field onto the edited mesh
+        """
+        import pickle
+
+        import numpy as np
+        import torch
+
+        logger.info("Caching NeRF features for future texture baking...")
+
+        # Extract vertex colors from NeRF by querying the Triplane field
+        vertex_colors = None
+        try:
+            vertices = np.array(mesh.vertices, dtype=np.float32)
+            vertices_tensor = torch.from_numpy(vertices).to(self.device)
+
+            # Query the NeRF model for colors at vertex positions
+            with torch.no_grad():
+                # Use the model's query method if available
+                if hasattr(model, "query_triplane") and callable(
+                    getattr(model, "query_triplane")
+                ):
+                    colors = model.query_triplane(
+                        scene_codes[0].unsqueeze(0), vertices_tensor.unsqueeze(0)
+                    )
+                    if colors is not None:
+                        vertex_colors = colors.squeeze(0).cpu().numpy()
+                elif hasattr(model, "renderer") and hasattr(
+                    model.renderer, "query_color"
+                ):
+                    colors = model.renderer.query_color(scene_codes[0], vertices_tensor)
+                    if colors is not None:
+                        vertex_colors = colors.cpu().numpy()
+
+            logger.debug(
+                f"Extracted vertex colors: {vertex_colors.shape if vertex_colors is not None else 'None'}"
+            )
+        except Exception as e:
+            logger.debug(f"Could not extract vertex colors from NeRF: {e}")
+
+        # Build features dictionary
+        features = {
+            "method": method,
+            "scene_code": scene_codes[0].cpu()
+            if hasattr(scene_codes[0], "cpu")
+            else scene_codes[0],
+            "vertices": np.array(mesh.vertices, dtype=np.float32),
+            "faces": np.array(mesh.faces, dtype=np.int32),
+            "vertex_colors": vertex_colors,
+            "vertex_normals": np.array(mesh.vertex_normals, dtype=np.float32)
+            if hasattr(mesh, "vertex_normals") and mesh.vertex_normals is not None
+            else None,
+            "camera_radius": 2.0,
+            "fov": 49.0,
+            "num_views": 8,
+            "model_state": None,  # Model too large to serialize; scene code is enough
+        }
+
+        # Save the image for fallback projection
+        try:
+            from PIL import Image
+            import io
+
+            buf = io.BytesIO()
+            original_image.save(buf, format="PNG")
+            features["original_image_bytes"] = buf.getvalue()
+        except Exception:
+            pass
+
+        # Write to disk
+        output = Path(output_path)
+        with open(str(output), "wb") as f:
+            pickle.dump(features, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        logger.info(f"NeRF features cached ({output.stat().st_size / 1024:.1f} KB)")
+        return output
 
     @staticmethod
     def _project_texture(mesh, original_image, tex_dir, resolution=2048):
