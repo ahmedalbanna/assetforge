@@ -1,0 +1,183 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "shell": "bash",
+    "model": "opencode/deepseek-v4-flash-free",
+    "small_model": "opencode/north-mini-code-free",
+    "default_agent": "build",
+    "username": "ahmed",
+    "autoupdate": "notify",
+    "snapshot": true,
+  
+    "plugin": [
+      "opencode-wakatime",
+      "opencode-vibeguard",
+      "opencode-notify",
+      "opencode-dynamic-context-pruning"
+    ],
+  
+    "permission": {
+      "read": "allow",
+      "edit": "allow",
+      "glob": "allow",
+      "grep": "allow",
+      "list": "allow",
+      "bash": "ask",
+      "task": "allow",
+      "external_directory": "ask",
+      "webfetch": "ask",
+      "websearch": "ask",
+      "question": "ask",
+      "todowrite": "allow",
+      "lsp": "allow",
+      "skill": "allow"
+    },
+  
+    "agent": {
+      "plan": {
+        "model": "opencode/mimo-v2.5-free",
+        "variant": "high",
+        "steps": 40,
+        "permission": { "bash": "ask" },
+        "prompt": "You are a planning agent. Use your advanced reasoning and large context to analyze requirements (including multi-modal visual assets if provided) and create clear, actionable plans before code is written. Identify dependencies and structural risks."
+      },
+      "build": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "steps": 100,
+        "permission": { "bash": "ask" },
+        "prompt": "You are a build agent for the AssetForge project. Your job is to implement solutions efficiently and correctly. Follow the project's existing patterns in AGENTS.md. Write tests alongside code (pytest for Python, cargo test for Rust). Run `pytest tests/ -v` and `cd rust && cargo test` after changes. Verify your work before declaring done."
+      },
+      "explore": {
+        "model": "opencode/north-mini-code-free",
+        "steps": 30,
+        "permission": {
+          "read": "allow",
+          "glob": "allow",
+          "grep": "allow",
+          "list": "allow",
+          "bash": "allow"
+        },
+        "prompt": "You are an exploration agent for the AssetForge project. This is a Python + Rust project with src/assetforge/ (Python backends/pipelines) and rust/ (Rust PyO3 extension). Explore the codebase to find architectural patterns, map dependencies, and answer technical queries accurately without modifications. Check AGENTS.md for project conventions."
+      },
+      "review": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "steps": 40,
+        "permission": {
+          "read": "allow",
+          "glob": "allow",
+          "grep": "allow"
+        },
+        "prompt": "You are a code review agent for the AssetForge project. Inspect code changes for quality, readability, performance, and adherence to project patterns (AGENTS.md). Look for anti-patterns, redundant logic, or lack of proper error handling. Pay attention to Rust-Python interop via PyO3, pipeline stage dependencies, and proper subprocess management for external tools (Blender, COLMAP, etc.). Provide constructive feedback without editing the code directly."
+      },
+      "security": {
+        "model": "opencode/mimo-v2.5-free",
+        "variant": "high",
+        "steps": 40,
+        "permission": {
+          "read": "allow",
+          "glob": "allow",
+          "grep": "allow",
+          "bash": "ask"
+        },
+        "prompt": "You are a security auditing agent for the AssetForge project. Scan code for complex logical flaws, multi-file data leaks, insecure subprocess calls (Blender, COLMAP, instant-meshes), unsafe deserialization of user-provided mesh/image files, and temporary file handling issues. Focus on safe subprocess command construction, path traversal prevention, and local storage security."
+      },
+      "general": {
+        "model": "opencode/mimo-v2.5-free",
+        "steps": 60,
+        "prompt": "You are a general-purpose agent for the AssetForge project. Adapt to the user's needs — whether that's processing images/assets, code reasoning, debugging, or technical writing. The project converts real-world images into game-ready assets (2D sprites, 3D meshes, Gaussian splats). Refer to AGENTS.md for build/test commands and architecture docs. Be concise and deeply helpful."
+      },
+      "title": {
+        "model": "opencode/north-mini-code-free"
+      },
+      "summary": {
+        "model": "opencode/north-mini-code-free"
+      },
+      "compaction": {
+        "model": "opencode/mimo-v2.5-free"
+      }
+    },
+  
+    "compaction": {
+      "auto": true,
+      "prune": true,
+      "tail_turns": 3
+    },
+  
+    "lsp": true,
+    "formatter": true,
+  
+    "tool_output": {
+      "max_lines": 15000,
+      "max_bytes": 700000
+    },
+  
+    "watcher": {
+      "ignore": [
+        "node_modules/**",
+        "dist/**",
+        "build/**",
+        ".git/**",
+        ".next/**",
+        "target/**",
+        "rust/target/**",
+        "venv/**",
+        ".venv/**",
+        "__pycache__/**",
+        ".pytest_cache/**",
+        ".ruff_cache/**",
+        "*.py[cod]",
+        "*.egg-info/**",
+        "*.egg",
+        "*.log",
+        ".cache/**",
+        "output/**",
+        "demo_output/**",
+        "benchmark_results/**",
+        "htmlcov/**",
+        ".coverage",
+        "coverage.xml",
+        "triposr_repo/**",
+        ".hf_cache/**",
+        ".env"
+      ]
+    },
+  
+    "mcp": {
+      "context7": {
+        "type": "remote",
+        "url": "https://mcp.context7.com/mcp"
+      },
+      "gh_grep": {
+        "type": "remote",
+        "url": "https://mcp.grep.app"
+      },
+      "sentry": {
+        "type": "remote",
+        "url": "https://mcp.sentry.dev/mcp",
+        "oauth": {},
+        "enabled": false
+      }
+    },
+  
+    "provider": {
+      "opencode": {
+        "models": {
+          "deepseek-v4-flash-free": {
+            "options": { "reasoningEffort": "high" },
+            "variants": { "high": {}, "low": {} }
+          },
+          "mimo-v2.5-free": {
+            "options": { "reasoningEffort": "high" },
+            "variants": { "high": {}, "low": {} }
+          },
+          "north-mini-code-free": {
+            "options": { "reasoningEffort": "high" },
+            "variants": { "high": {}, "low": {} }
+          }
+        }
+      }
+    },
+  
+    "logLevel": "INFO"
+  }

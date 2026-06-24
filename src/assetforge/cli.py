@@ -236,10 +236,39 @@ def cmd_3d_scan(
         help="Quality preset: 'fast', 'balanced', 'high', 'ultra'. "
         "Overrides per-parameter flags. If empty, uses per-param defaults.",
     ),
-    # Individual configuration (used when quality is empty)
-    feature_type: str = typer.Option(
-        "sift", "--feature-type", help="Feature extractor: 'sift' or 'orb'"
+    # Research-backed parameters
+    sfm_type: str = typer.Option(
+        "incremental",
+        "--sfm-type",
+        help="SfM algorithm: 'incremental' (robust, default), "
+        "'global' (faster, no drift), or 'incremental_v2'",
     ),
+    feature_type: str = typer.Option(
+        "sift",
+        "--feature-type",
+        help="Feature extractor: 'sift' (best), 'orb' (fast), or 'akaze'",
+    ),
+    mask_dir: str = typer.Option(
+        None,
+        "--mask-dir",
+        help="Directory with background masks (global_mask.png or <image>_mask.png)",
+    ),
+    resolution_level: int = typer.Option(
+        0,
+        "--resolution-level",
+        help="Resolution reduction for memory: 0=full, 1=half, 2=quarter",
+    ),
+    mesh_refinement: bool = typer.Option(
+        True,
+        "--mesh-refinement/--no-mesh-refinement",
+        help="Enable mesh refinement for 15-30% surface detail improvement",
+    ),
+    normalize_coords: bool = typer.Option(
+        True,
+        "--normalize-coords/--no-normalize-coords",
+        help="Normalize coordinates (prevents float32 precision loss)",
+    ),
+    # Individual configuration (used when quality is empty)
     mesh_quality: str = typer.Option(
         "high", "--mesh-quality", help="Mesh quality: 'low', 'medium', 'high'"
     ),
@@ -257,10 +286,18 @@ def cmd_3d_scan(
 
     Quality presets (--quality):
     \b
-      fast      \tORB features, low mesh, no retopology (fastest)
-      balanced  \tSIFT features, medium mesh, retopology (default)
-      high      \tSIFT features, high mesh, retopology (30k faces)
-      ultra     \tSIFT features, high mesh, retopology (50k faces)
+      fast      \tORB features, global SfM, low mesh, no refine, no retopo (fastest)
+      balanced  \tSIFT features, incremental SfM, medium mesh, refine, retopo (default)
+      high      \tSIFT features, incremental SfM, high mesh, refine, retopo (30k faces)
+      ultra     \tSIFT features, global SfM, high mesh, refine, retopo (50k faces)
+
+    Research-backed features:
+    \b
+      --sfm-type           Select SfM algorithm (incremental/global)
+      --mask-dir           Exclude background regions from reconstruction
+      --resolution-level   Reduce memory usage for large scenes
+      --mesh-refinement    Recover fine surface details (15-30% improvement)
+      --normalize-coords   Prevent float32 precision loss (recommended)
 
     For fine control, use individual flags instead of --quality.
     """
@@ -270,7 +307,12 @@ def cmd_3d_scan(
         input_dir=input,
         output_dir=output,
         quality=quality,
+        sfm_type=sfm_type,
         feature_type=feature_type,
+        mask_dir=mask_dir,
+        resolution_level=resolution_level,
+        mesh_refinement=mesh_refinement,
+        normalize_coordinates=normalize_coords,
         mesh_quality=mesh_quality,
         retopology=retopology,
         target_faces=target_faces,

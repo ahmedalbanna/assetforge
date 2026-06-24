@@ -208,6 +208,85 @@ def run_3d_gen_pipeline(
     return model_file, "✅ Model generated successfully!"
 
 
+def run_3d_scan_pipeline(
+    input_images: list,
+    quality: str,
+    sfm_type: str,
+    feature_type: str,
+    mask_dir: str,
+    resolution_level: int,
+    mesh_refinement: bool,
+    normalize_coords: bool,
+    mesh_quality: str,
+    retopology: bool,
+    target_faces: int,
+    output_format: str,
+    progress=gr.Progress(),
+):
+    """Run 3D photogrammetry pipeline from uploaded images."""
+    if not input_images:
+        return None, "⚠️ Please upload photos first."
+
+    import tempfile
+    import shutil
+
+    # Save uploaded files to a temp directory
+    out_dir = tempfile.mkdtemp(prefix="assetforge_3dscan_")
+    input_dir = Path(out_dir) / "photos"
+    input_dir.mkdir(parents=True, exist_ok=True)
+
+    for img in input_images:
+        shutil.copy2(img, input_dir / Path(img).name)
+
+    from assetforge.pipelines.pipeline_3d_photo import Pipeline3DPhoto
+
+    progress(0.1, desc="Initializing photogrammetry pipeline...")
+
+    pipeline = Pipeline3DPhoto(
+        input_dir=str(input_dir),
+        output_dir=str(Path(out_dir) / "output"),
+        quality=quality,
+        sfm_type=sfm_type,
+        feature_type=feature_type,
+        mask_dir=mask_dir if mask_dir else None,
+        resolution_level=resolution_level,
+        mesh_refinement=mesh_refinement,
+        normalize_coordinates=normalize_coords,
+        mesh_quality=mesh_quality,
+        retopology=retopology,
+        target_faces=target_faces,
+        output_format=output_format,
+    )
+
+    progress(0.2, desc="Running photogrammetry (this may take a while)...")
+    try:
+        results = pipeline.run()
+    except Exception as e:
+        return None, f"❌ Pipeline failed: {e}"
+
+    all_ok = all(r.success for r in results)
+    if not all_ok:
+        errors = [f"{r.name}: {r.error}" for r in results if not r.success]
+        return None, "❌ " + "\n".join(errors)
+
+    progress(0.9, desc="Collecting outputs...")
+
+    # Find the final output model
+    model_file = None
+    for r in results:
+        for p in r.output_paths:
+            p = Path(p)
+            if p.exists() and p.suffix in (".glb", ".obj", ".gltf", ".ply", ".fbx"):
+                model_file = str(p)
+                break
+
+    progress(1.0, desc="Done!")
+    if model_file and Path(model_file).exists():
+        size_kb = Path(model_file).stat().st_size / 1024
+        return model_file, f"✅ Model reconstructed ({size_kb:.1f} KB)"
+    return model_file, "✅ Pipeline completed (check output directory for models)"
+
+
 def run_retopo_pipeline(
     input_mesh,
     target_faces: int,
@@ -739,7 +818,183 @@ def create_ui():
                     outputs=[model_download],
                 )
 
-            # ──── TAB 3: Retopology ────
+            # ──── TAB 3: 3D Photogrammetry Scan ────
+            with gr.Tab("📷 3D Scan"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### Input")
+                        input_scan_images = gr.File(
+                            label="Upload Photos (from multiple angles)",
+                            file_count="multiple",
+                            file_types=[
+                                ".png",
+                                ".jpg",
+                                ".jpeg",
+                                ".webp",
+                                ".bmp",
+                                ".tiff",
+                            ],
+                        )
+
+                        # ── Quality Preset ──
+                        with gr.Group():
+                            gr.Markdown("**🎯 Quality Preset**")
+                            scan_quality = gr.Radio(
+                                label="Quality",
+                                choices=[
+                                    (
+                                        "Fast — ORB, global SfM, low mesh, no refine",
+                                        "fast",
+                                    ),
+                                    (
+                                        "Balanced — SIFT, incremental SfM, medium mesh",
+                                        "balanced",
+                                    ),
+                                    (
+                                        "High — SIFT, incremental SfM, high mesh, refine",
+                                        "high",
+                                    ),
+                                    (
+                                        "Ultra — SIFT, global SfM, high mesh, refine",
+                                        "ultra",
+                                    ),
+                                ],
+                                value="balanced",
+                            )
+
+                        # ── Research-backed Parameters ──
+                        with gr.Accordion("🔬 Research-Backed Settings", open=False):
+                            gr.Markdown(
+                                "**Based on analysis of OpenMVG/OpenMVS internals**"
+                            )
+                            with gr.Group():
+                                gr.Markdown("**SfM Configuration**")
+                                scan_sfm_type = gr.Dropdown(
+                                    label="SfM Algorithm",
+                                    choices=[
+                                        (
+                                            "Incremental — robust, handles sparse data",
+                                            "incremental",
+                                        ),
+                                        ("Global — faster, no drift", "global"),
+                                        (
+                                            "Incremental V2 — updated incremental",
+                                            "incremental_v2",
+                                        ),
+                                    ],
+                                    value="incremental",
+                                    info="Global is 2-5x faster; Incremental is more robust",
+                                )
+                                scan_feature_type = gr.Dropdown(
+                                    label="Feature Extractor",
+                                    choices=[
+                                        (
+                                            "SIFT — best quality, scale-invariant",
+                                            "sift",
+                                        ),
+                                        ("ORB — fast, good for real-time", "orb"),
+                                        ("AKAZE — middle ground", "akaze"),
+                                    ],
+                                    value="sift",
+                                )
+                                scan_mask_dir = gr.Textbox(
+                                    label="Mask Directory (optional)",
+                                    placeholder="/path/to/masks",
+                                    info="global_mask.png or <image>_mask.png per image",
+                                )
+
+                            with gr.Group():
+                                gr.Markdown("**Memory Management**")
+                                scan_resolution_level = gr.Slider(
+                                    label="Resolution Level (0=full, 2=quarter)",
+                                    minimum=0,
+                                    maximum=3,
+                                    step=1,
+                                    value=0,
+                                    info="Higher = less memory, lower quality",
+                                )
+                                with gr.Row():
+                                    scan_mesh_refinement = gr.Checkbox(
+                                        label="Mesh Refinement (15-30% detail boost)",
+                                        value=True,
+                                    )
+                                    scan_normalize_coords = gr.Checkbox(
+                                        label="Normalize Coordinates (prevents precision loss)",
+                                        value=True,
+                                    )
+
+                            with gr.Group():
+                                gr.Markdown("**Seam Leveling Control**")
+                                gr.Markdown(
+                                    "*Automatically disabled when masks are present "
+                                    "to prevent black artifacts (research-backed)*",
+                                )
+
+                        # ── Basic Settings ──
+                        with gr.Accordion("Basic Settings", open=True):
+                            scan_mesh_quality = gr.Dropdown(
+                                label="Mesh Quality",
+                                choices=["low", "medium", "high"],
+                                value="high",
+                            )
+                            scan_retopology = gr.Checkbox(
+                                label="Apply Retopology (game-ready topology)",
+                                value=False,
+                            )
+                            with gr.Row():
+                                scan_target_faces = gr.Number(
+                                    label="Target Faces",
+                                    value=15000,
+                                    precision=0,
+                                    minimum=100,
+                                    maximum=500000,
+                                )
+                                scan_output_format = gr.Dropdown(
+                                    label="Output Format",
+                                    choices=["glb", "obj", "fbx", "ply"],
+                                    value="glb",
+                                )
+
+                        run_btn_scan = gr.Button(
+                            "🚀 Reconstruct 3D Model", variant="primary", size="lg"
+                        )
+
+                    with gr.Column(scale=2):
+                        gr.Markdown("### Results")
+                        status_scan = gr.Markdown(
+                            "Ready. Upload photos and click reconstruct."
+                        )
+                        scan_model_viewer = gr.Model3D(
+                            label="Reconstructed Model",
+                            clear_color=(0.2, 0.2, 0.2, 1.0),
+                            height=500,
+                        )
+                        scan_model_download = gr.File(label="Download Model")
+
+                run_btn_scan.click(
+                    fn=run_3d_scan_pipeline,
+                    inputs=[
+                        input_scan_images,
+                        scan_quality,
+                        scan_sfm_type,
+                        scan_feature_type,
+                        scan_mask_dir,
+                        scan_resolution_level,
+                        scan_mesh_refinement,
+                        scan_normalize_coords,
+                        scan_mesh_quality,
+                        scan_retopology,
+                        scan_target_faces,
+                        scan_output_format,
+                    ],
+                    outputs=[scan_model_viewer, status_scan],
+                ).then(
+                    fn=lambda m: m,
+                    inputs=[scan_model_viewer],
+                    outputs=[scan_model_download],
+                )
+
+            # ──── TAB 4: Retopology ────
             with gr.Tab("🔧 Retopology"):
                 with gr.Row():
                     with gr.Column(scale=1):
